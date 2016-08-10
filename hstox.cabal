@@ -45,9 +45,33 @@ library
     , saltine
     , text
     , transformers
+  c-sources:
+      test/toxcore/toxcore/toxcore/DHT.c
+      test/toxcore/toxcore/toxcore/LAN_discovery.c
+      test/toxcore/toxcore/toxcore/Messenger.c
+      test/toxcore/toxcore/toxcore/TCP_client.c
+      test/toxcore/toxcore/toxcore/TCP_connection.c
+      test/toxcore/toxcore/toxcore/TCP_server.c
+      test/toxcore/toxcore/toxcore/assoc.c
+      test/toxcore/toxcore/toxcore/crypto_core.c
+      test/toxcore/toxcore/toxcore/friend_connection.c
+      test/toxcore/toxcore/toxcore/friend_requests.c
+      test/toxcore/toxcore/toxcore/group.c
+      test/toxcore/toxcore/toxcore/list.c
+      test/toxcore/toxcore/toxcore/logger.c
+      test/toxcore/toxcore/toxcore/net_crypto.c
+      test/toxcore/toxcore/toxcore/network.c
+      test/toxcore/toxcore/toxcore/onion.c
+      test/toxcore/toxcore/toxcore/onion_announce.c
+      test/toxcore/toxcore/toxcore/onion_client.c
+      test/toxcore/toxcore/toxcore/ping.c
+      test/toxcore/toxcore/toxcore/ping_array.c
+      test/toxcore/toxcore/toxcore/tox.c
+      test/toxcore/toxcore/toxcore/util.c
   exposed-modules:
       Network.Tox
       Network.Tox.Binary
+      --Network.Tox.C.CryptoCore
       Network.Tox.Crypto
       Network.Tox.Crypto.Box
       Network.Tox.Crypto.CombinedKey
