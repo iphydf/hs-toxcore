@@ -42,15 +42,9 @@ import           Text.Read                         (readPrec)
 
 \end{code}
 
-A Crypto Number is a large fixed size unsigned (positive) integer.  Its binary
-encoding is as a Big Endian integer in exactly the encoded byte size.  Its
-human-readable encoding is as a base-16 number encoded as String.  The NaCl
-implementation \href{https://github.com/jedisct1/libsodium}{libsodium} supplies
-the functions \texttt{sodium_bin2hex} and \texttt{sodium_hex2bin} to aid in
-implementing the human-readable encoding.  The in-memory encoding of these
-crypto numbers in NaCl already satisfies the binary encoding, so for
-applications directly using those APIs, binary encoding and decoding is the
-\href{https://en.wikipedia.org/wiki/Identity_function}{identity function}.
+A Crypto Number is a large fixed width unsigned integer.  The cryptographic
+library NaCl performs arithmetic on these numbers, but for the purpose of the
+protocol, we can treat them as byte strings.
 
 \begin{code}
 
@@ -127,8 +121,25 @@ instance CryptoNumber a => Binary (Key a) where
     decode bytes
 
 
+\end{code}
+
+Its binary encoding is as a Big Endian integer in exactly the encoded byte
+size.
+
+The in-memory encoding of these crypto numbers in NaCl already satisfies the
+binary encoding, so for applications directly using those APIs, binary encoding
+and decoding is the
+\href{https://en.wikipedia.org/wiki/Identity_function}{identity function}.
+
+Its human-readable encoding is as a base-16 number encoded as String.
+The NaCl implementation \href{https://github.com/jedisct1/libsodium}{libsodium}
+supplies the functions \texttt{sodium_bin2hex} and \texttt{sodium_hex2bin} to
+aid in implementing the human-readable encoding.
+
+\begin{code}
+
 instance CryptoNumber a => Show (Key a) where
-  show (Key key) = show $ Base16.encode $ Sodium.encode key
+  show = show . Base16.encode . Sodium.encode
 
 instance CryptoNumber a => Read (Key a) where
   readPrec = fst . Base16.decode <$> readPrec >>= decode

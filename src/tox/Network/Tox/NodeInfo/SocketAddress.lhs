@@ -43,14 +43,13 @@ instance MessagePack SocketAddress
 
 
 putSocketAddress :: TransportProtocol -> SocketAddress -> Binary.Put
-putSocketAddress protocol (SocketAddress hostAddress portNumber) =
-  let (putAddressFamily, putHostAddress) = HostAddress.putHostAddress hostAddress in
-  do
-    Bits.runBitPut $ do
-      bitPut protocol -- first bit = protocol
-      putAddressFamily -- 7 bits = address family
-    putHostAddress
-    put portNumber
+putSocketAddress protocol (SocketAddress hostAddress portNumber) = do
+  let (putAddressFamily, putHostAddress) = HostAddress.putHostAddress hostAddress
+  Bits.runBitPut $ do
+    bitPut protocol -- first bit = protocol
+    putAddressFamily -- 7 bits = address family
+  putHostAddress
+  put portNumber
 
 
 getSocketAddress :: Binary.Get (TransportProtocol, SocketAddress)

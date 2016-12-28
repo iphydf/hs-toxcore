@@ -52,6 +52,17 @@ configure: .configure.stamp
 	cabal configure $(CONFIGURE_FLAGS) $(ENABLE_COVERAGE)
 	@touch $@
 
+spec.pdf: src/tox/Network/Tox.lhs $(shell find src -name "*.lhs") Makefile
+	pandoc -f latex+lhs -t native $<		\
+		| grep -v '^,CodeBlock '		\
+		| pandoc				\
+			-M title:'The Tox Protocol'	\
+			-V geometry:margin=1in		\
+			-V colorlinks:true		\
+			-f native			\
+			-t latex			\
+			-o $@
+
 doc: $(DOCS)
 ../spec/spec.md: src/tox/Network/Tox.lhs $(shell find src -name "*.lhs") ../spec/pandoc.mk Makefile
 	echo '% The Tox Reference' > $@

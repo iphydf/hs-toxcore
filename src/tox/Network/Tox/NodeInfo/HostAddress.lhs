@@ -22,8 +22,8 @@ import           Data.Binary               (Binary)
 import qualified Data.Binary               as Binary (get, put)
 import qualified Data.Binary.Bits.Get      as Bits
 import qualified Data.Binary.Bits.Put      as Bits
-import qualified Data.Binary.Get           as Bytes
-import qualified Data.Binary.Put           as Bytes
+import qualified Data.Binary.Get           as Binary
+import qualified Data.Binary.Put           as Binary
 import qualified Data.IP                   as IP
 import           Data.MessagePack          (MessagePack)
 import           Data.Typeable             (Typeable)
@@ -61,7 +61,7 @@ instance Read HostAddress where
     IP.IPv6 ipv6 -> IPv6 $ IP.toHostAddress6 ipv6
 
 
-getHostAddressGetter :: Bits.BitGet (Bytes.Get HostAddress)
+getHostAddressGetter :: Bits.BitGet (Binary.Get HostAddress)
 getHostAddressGetter =
   Bits.getWord8 7 >>= \case
     2  -> return $ IPv4 <$> Binary.get
@@ -74,12 +74,12 @@ putAddressFamily (IPv4 _) = Bits.putWord8 7 2
 putAddressFamily (IPv6 _) = Bits.putWord8 7 10
 
 
-putHostAddressValue :: HostAddress -> Bytes.Put
+putHostAddressValue :: HostAddress -> Binary.Put
 putHostAddressValue (IPv4 addr) = Binary.put addr
 putHostAddressValue (IPv6 addr) = Binary.put addr
 
 
-putHostAddress :: HostAddress -> (Bits.BitPut (), Bytes.Put)
+putHostAddress :: HostAddress -> (Bits.BitPut (), Binary.Put)
 putHostAddress = putAddressFamily &&& putHostAddressValue
 
 

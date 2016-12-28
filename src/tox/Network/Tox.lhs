@@ -121,7 +121,8 @@ and contains all human-readable glyphs verbatim.  Control characters are
 represented in an isomorphic human-readable way.  I.e. every control character
 has exactly one human-readable representation, and a mapping exists from the
 human-readable representation to the control character.  Therefore, the use of
-Unicode Control Characters (U+240x) is not permitted without additional marker.
+Unicode Control Characters (U+240x) to represent the actual control character
+(U+000x) is not permitted without additional marker.
 
 \input{src/tox/Network/Tox/Crypto.lhs}
 \input{src/tox/Network/Tox/NodeInfo.lhs}
