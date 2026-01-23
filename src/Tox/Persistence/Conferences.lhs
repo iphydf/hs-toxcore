@@ -4,7 +4,6 @@ This section contains a list of saved conferences.
 
 \begin{code}
 {-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE StrictData                 #-}
 module Tox.Persistence.Conferences where

@@ -2,7 +2,6 @@
 
 \begin{code}
 {-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StrictData                 #-}
 module Tox.Persistence.DHT (DHT) where
 

@@ -1,6 +1,7 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_library")
 load("//third_party/haskell/hspec-discover:build_defs.bzl", "hspec_test")
-load("//third_party/pandoc:build_defs.bzl", "pandoc_doc")
+
+#load("//third_party/pandoc:build_defs.bzl", "pandoc_doc")
 load("//tools/project:build_defs.bzl", "project")
 
 project(
@@ -78,7 +79,16 @@ haskell_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-network",
+        "//hs-msgpack-binary",
+        "//third_party/haskell:QuickCheck",
         "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:mtl",
     ],
 )
 
@@ -198,7 +208,6 @@ haskell_library(
     srcs = [
         "src/Tox/Network.lhs",
         "src/Tox/Network/Backend.lhs",
-        "src/Tox/Network/Binary.hs",
         "src/Tox/Network/Encoding.hs",
         "src/Tox/Network/HostAddress.lhs",
         "src/Tox/Network/MonadRandomBytes.hs",
@@ -402,15 +411,15 @@ haskell_library(
     ],
 )
 
-pandoc_doc(
-    name = "tox-spec",
-    src = "src/Tox.lhs",
-    out = "tox-spec.md",
-    data = glob([
-        "src/**/*.lhs",
-        "test/**/*.lhs",
-    ]),
-)
+# pandoc_doc(
+#     name = "tox-spec",
+#     src = "src/Tox.lhs",
+#     out = "tox-spec.md",
+#     data = glob([
+#         "src/**/*.lhs",
+#         "test/**/*.lhs",
+#     ]),
+# )
 
 hspec_test(
     name = "testsuite",
@@ -423,9 +432,11 @@ hspec_test(
         ":tox-crypto-keyed",
         ":tox-dht",
         ":tox-network",
+        ":tox-onion",
         ":tox-persistence",
         "//hs-msgpack-binary",
         "//hs-msgpack-types",
+        "//third_party/haskell:MonadRandom",
         "//third_party/haskell:QuickCheck",
         "//third_party/haskell:async",
         "//third_party/haskell:base",
@@ -435,6 +446,7 @@ hspec_test(
         "//third_party/haskell:hspec",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
+        "//third_party/haskell:random",
         "//third_party/haskell:saltine",
         "//third_party/haskell:text",
     ],

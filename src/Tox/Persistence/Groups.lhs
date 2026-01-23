@@ -6,7 +6,6 @@ This section contains a list of saved conferences.
 {-# LANGUAGE DeriveGeneric              #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE RecordWildCards            #-}
 {-# LANGUAGE StrictData                 #-}
 module Tox.Persistence.Groups where
 
@@ -163,7 +162,7 @@ newtype ModList = ModList
 
 instance MessagePack ModList where
     toObject cfg (ModList mods) =
-        toObject cfg $ (length mods, BS.concat $ map Sodium.encode mods)
+        toObject cfg (length mods, BS.concat $ map Sodium.encode mods)
 
     fromObjectWith cfg obj = do
         (len, catMods) <- fromObjectWith cfg obj

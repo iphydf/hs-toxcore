@@ -1,6 +1,197 @@
 \begin{code}
-{-# LANGUAGE StrictData #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE StrictData    #-}
 module Tox.Onion.RPC where
+
+import           Data.Binary               (Binary, get, put)
+import qualified Data.Binary.Get           as Get
+import           Data.Word                 (Word64, Word8)
+import           GHC.Generics              (Generic)
+import           Test.QuickCheck.Arbitrary (Arbitrary (..))
+
+import           Tox.Crypto.Box               (CipherText)
+import           Tox.Crypto.Key               (Nonce, PublicKey)
+import           Tox.Network.NodeInfo         (NodeInfo)
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Implementation.
+ -
+ ------------------------------------------------------------------------------}
+
+
+-- | Announce Request Payload (decrypted).
+data AnnounceRequestPayload = AnnounceRequestPayload
+  { announceRequestPingId          :: PublicKey -- ^ Ping ID or 0
+  , announceRequestSearchKey       :: PublicKey -- ^ Public key we are searching for
+  , announceRequestDataSendbackKey :: PublicKey -- ^ Key for data packets back to us
+  , announceRequestSendbackData    :: Word64    -- ^ 8 bytes of sendback data
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary AnnounceRequestPayload where
+  put req = do
+    put $ announceRequestPingId req
+    put $ announceRequestSearchKey req
+    put $ announceRequestDataSendbackKey req
+    put $ announceRequestSendbackData req
+  get = AnnounceRequestPayload <$> get <*> get <*> get <*> get
+
+instance Arbitrary AnnounceRequestPayload where
+  arbitrary = AnnounceRequestPayload <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Announce Request Packet (0x83).
+data AnnounceRequest = AnnounceRequest
+  { announceRequestNonce            :: Nonce
+  , announceRequestSenderPublicKey  :: PublicKey
+  , announceRequestEncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary AnnounceRequest where
+  put req = do
+    put $ announceRequestNonce req
+    put $ announceRequestSenderPublicKey req
+    put $ announceRequestEncryptedPayload req
+  get = AnnounceRequest <$> get <*> get <*> get
+
+instance Arbitrary AnnounceRequest where
+  arbitrary = AnnounceRequest <$> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Announce Response Payload (decrypted).
+data AnnounceResponsePayload = AnnounceResponsePayload
+  { announceResponseIsStored :: Word8     -- ^ 0, 1, or 2
+  , announceResponsePingId   :: PublicKey -- ^ Ping ID or Public Key
+  , announceResponseNodes    :: [NodeInfo] -- ^ Up to 4 nodes
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary AnnounceResponsePayload where
+  put res = do
+    put $ announceResponseIsStored res
+    put $ announceResponsePingId res
+    mapM_ put (take 4 $ announceResponseNodes res)
+  get = do
+    isStored <- get
+    pingId <- get
+    AnnounceResponsePayload isStored pingId <$> getNodes
+    where
+      getNodes = do
+        empty <- Get.isEmpty
+        if empty
+          then return []
+          else (:) <$> get <*> getNodes
+
+instance Arbitrary AnnounceResponsePayload where
+  arbitrary = AnnounceResponsePayload <$> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Announce Response Packet (0x84).
+data AnnounceResponse = AnnounceResponse
+  { announceResponseSendbackData    :: Word64 -- ^ 8 bytes of sendback data
+  , announceResponseNonce           :: Nonce
+  , announceResponseEncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary AnnounceResponse where
+  put res = do
+    put $ announceResponseSendbackData res
+    put $ announceResponseNonce res
+    put $ announceResponseEncryptedPayload res
+  get = AnnounceResponse <$> get <*> get <*> get
+
+instance Arbitrary AnnounceResponse where
+  arbitrary = AnnounceResponse <$> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Data to Route Request Packet (0x85).
+data DataRouteRequest = DataRouteRequest
+  { dataRouteRequestDestination      :: PublicKey -- ^ Destination real PK
+  , dataRouteRequestNonce            :: Nonce
+  , dataRouteRequestTemporaryKey     :: PublicKey
+  , dataRouteRequestEncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary DataRouteRequest where
+  put req = do
+    put $ dataRouteRequestDestination req
+    put $ dataRouteRequestNonce req
+    put $ dataRouteRequestTemporaryKey req
+    put $ dataRouteRequestEncryptedPayload req
+  get = DataRouteRequest <$> get <*> get <*> get <*> get
+
+instance Arbitrary DataRouteRequest where
+  arbitrary = DataRouteRequest <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Data to Route Response Packet (0x86).
+data DataRouteResponse = DataRouteResponse
+  { dataRouteResponseNonce            :: Nonce
+  , dataRouteResponseTemporaryKey     :: PublicKey
+  , dataRouteResponseEncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary DataRouteResponse where
+  put res = do
+    put $ dataRouteResponseNonce res
+    put $ dataRouteResponseTemporaryKey res
+    put $ dataRouteResponseEncryptedPayload res
+  get = DataRouteResponse <$> get <*> get <*> get
+
+instance Arbitrary DataRouteResponse where
+  arbitrary = DataRouteResponse <$> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Inner payload of a Data Route packet (decrypted by destination).
+data DataRouteInner = DataRouteInner
+  { dataRouteInnerSenderPublicKey :: PublicKey -- ^ Sender real PK
+  , dataRouteInnerEncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary DataRouteInner where
+  put inner = do
+    put $ dataRouteInnerSenderPublicKey inner
+    put $ dataRouteInnerEncryptedPayload inner
+  get = DataRouteInner <$> get <*> get
+
+instance Arbitrary DataRouteInner where
+  arbitrary = DataRouteInner <$> arbitrary <*> arbitrary
+
+
+-- | DHT Public Key Packet (0x9c).
+-- Sent anonymously via Onion to help friends connect back.
+data DHTPublicKeyPacket = DHTPublicKeyPacket
+  { dhtPKPacketNoReplay   :: Word64
+  , dhtPKPacketOurDHTKey  :: PublicKey
+  , dhtPKPacketNodes      :: [NodeInfo] -- ^ Up to 4 nodes
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance Binary DHTPublicKeyPacket where
+  put pkt = do
+    put $ dhtPKPacketNoReplay pkt
+    put $ dhtPKPacketOurDHTKey pkt
+    mapM_ put (take 4 $ dhtPKPacketNodes pkt)
+  get = do
+    noReplay <- get
+    dhtKey <- get
+    DHTPublicKeyPacket noReplay dhtKey <$> getNodes
+    where
+      getNodes = do
+        empty <- Get.isEmpty
+        if empty
+          then return []
+          else (:) <$> get <*> getNodes
+
+instance Arbitrary DHTPublicKeyPacket where
+  arbitrary = DHTPublicKeyPacket <$> arbitrary <*> arbitrary <*> arbitrary
 \end{code}
 
 This explained how to create onion packets and how they are sent back.  Next is

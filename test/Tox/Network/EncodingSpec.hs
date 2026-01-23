@@ -31,7 +31,7 @@ import           Data.Word            (Word64, Word8)
 import qualified Tox.Core.Bits.Get    as Bits (BitGet, runBitGet)
 import qualified Tox.Core.Bits.Put    as Bits (BitPut, runBitPut)
 
-import qualified Tox.Network.Binary   as Binary
+import qualified Tox.Network.Encoding as Encoding
 import           Tox.Network.Encoding (BitEncoding, bitGet, bitPut)
 
 
@@ -140,5 +140,5 @@ rpcSpec (_ :: proxy a) =
             decodeA (encodeA x) `shouldBe` Just x
 
   where
-    encodeA = Binary.encode :: a -> ByteString.ByteString
-    decodeA = Binary.decode :: ByteString.ByteString -> Maybe a
+    encodeA = Encoding.encode :: a -> ByteString.ByteString
+    decodeA = Encoding.decode :: ByteString.ByteString -> Maybe a

@@ -6,6 +6,7 @@ module Tox.DHT.Node where
 import           Control.Monad.State      (gets)
 import           Data.Binary              (Binary)
 import qualified Data.ByteString          as BS
+import           Data.Foldable            (forM_)
 import           Tox.DHT.DhtPacket        as DhtPacket
 import           Tox.DHT.DhtRequestPacket (DhtRequestPacket)
 import           Tox.DHT.DhtState         as DhtState
@@ -15,7 +16,7 @@ import           Tox.DHT.Operation        (DhtNodeMonad, bootstrapNode, doDHT,
                                            handleNodesResponse,
                                            handlePingRequest,
                                            handlePingResponse)
-import qualified Tox.Network.Binary       as Binary
+import qualified Tox.Network.Encoding     as Encoding
 import           Tox.Network.NodeInfo     (NodeInfo (..))
 import           Tox.Network.Packet       (Packet (..))
 import           Tox.Network.PacketKind   as PacketKind
@@ -26,19 +27,17 @@ handleIncomingPacket :: forall m. DhtNodeMonad m => NodeInfo -> Packet BS.ByteSt
 handleIncomingPacket from (Packet kind payload) = do
     kp <- gets DhtState.dhtKeyPair
     let decodeDht :: forall a. Binary a => (NodeInfo -> a -> m ()) -> m ()
-        decodeDht handler = case Binary.decode payload of
+        decodeDht handler = case Encoding.decode payload of
             Nothing -> return ()
             Just dhtPacket -> do
                 mDecoded <- DhtPacket.decodeKeyed kp dhtPacket
-                case mDecoded of
-                    Nothing      -> return ()
-                    Just decoded -> handler from decoded
+                forM_ mDecoded (handler from)
     case kind of
         PacketKind.PingRequest   -> decodeDht handlePingRequest
         PacketKind.PingResponse  -> decodeDht handlePingResponse
         PacketKind.NodesRequest  -> decodeDht handleNodesRequest
         PacketKind.NodesResponse -> decodeDht handleNodesResponse
-        PacketKind.Crypto        -> case Binary.decode payload of
+        PacketKind.Crypto        -> case Encoding.decode payload of
             Nothing -> return ()
             Just (dhtReq :: DhtRequestPacket) -> handleDhtRequestPacket from dhtReq
         _ -> return ()

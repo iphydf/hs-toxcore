@@ -33,6 +33,9 @@ library
     Tox.Application.GroupChat
     Tox.Application.GroupChatPackets
     Tox.Application.LegacyGroup
+    Tox.Conduit.DHT
+    Tox.Conduit.Encoding
+    Tox.Conduit.Network
     Tox.Core.Bits
     Tox.Core.Bits.Get
     Tox.Core.Bits.Put
@@ -56,6 +59,7 @@ library
     Tox.DHT.DhtState
     Tox.DHT.Distance
     Tox.DHT.KBuckets
+    Tox.DHT.Node
     Tox.DHT.NodeList
     Tox.DHT.NodesRequest
     Tox.DHT.NodesResponse
@@ -66,7 +70,6 @@ library
     Tox.DHT.Stamped
     Tox.Network
     Tox.Network.Backend
-    Tox.Network.Binary
     Tox.Network.Discovery.LAN
     Tox.Network.Encoding
     Tox.Network.HostAddress
@@ -106,6 +109,8 @@ library
     , binary
     , bytestring
     , clock              >=0.3    && <0.8.4.0
+    , conduit
+    , conduit-extra
     , containers
     , entropy
     , integer-gmp
@@ -196,6 +201,9 @@ test-suite testsuite
     Tox.Network.ProtocolSpec
     Tox.Network.SocketAddressSpec
     Tox.Network.TransportProtocolSpec
+    Tox.Onion.PathSpec
+    Tox.Onion.RPCSpec
+    Tox.Onion.TunnelSpec
     Tox.PersistenceSpec
 
   build-tool-depends: hspec-discover:hspec-discover
@@ -207,10 +215,12 @@ test-suite testsuite
     , containers
     , hspec
     , monad-validate
+    , MonadRandom
     , msgpack-binary
     , msgpack-types   >=0.2 && <0.4
     , mtl
     , QuickCheck
+    , random
     , saltine
     , text
     , toxcore

@@ -1,6 +1,5 @@
-{-# LANGUAGE DeriveGeneric              #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE StrictData                 #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE StrictData    #-}
 module Tox.Persistence.Nodes
     ( Nodes (..)
     ) where

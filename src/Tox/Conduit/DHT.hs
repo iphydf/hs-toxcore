@@ -22,7 +22,7 @@ import           Tox.DHT.Node                 (handleBootstrap,
                                                handleIncomingPacket,
                                                handleMaintenance)
 import           Tox.DHT.Operation            (DhtNodeMonad)
-import qualified Tox.Network.Binary           as Binary
+import qualified Tox.Network.Encoding         as Encoding
 import           Tox.Network.MonadRandomBytes (MonadRandomBytes (..))
 import           Tox.Network.Networked        (Networked (..))
 import           Tox.Network.NodeInfo         (NodeInfo)
@@ -45,7 +45,7 @@ instance Keyed m => Keyed (DhtConduit i o m) where
 
 -- | The 'Networked' instance for 'DhtConduit' yields outgoing packets.
 instance (Monad m) => Networked (DhtConduit i (NodeInfo, Packet BS.ByteString) m) where
-    sendPacket to packet = DhtConduit $ yield (to, fmap Binary.encode packet)
+    sendPacket to packet = DhtConduit $ yield (to, fmap Encoding.encode packet)
 
 -- | 'DhtConduit' is a 'DhtNodeMonad' if the underlying monad 'm' provides state and other effects.
 instance (Timed m, MonadRandomBytes m, MonadState DhtState m, Keyed m)
