@@ -1,0 +1,50 @@
+\begin{code}
+{-# LANGUAGE StrictData #-}
+module Tox.Network.Discovery.LAN where
+\end{code}
+
+\chapter{LAN discovery}
+
+LAN discovery is a way to discover Tox peers that are on a local network.  If
+two Tox friends are on a local network, the most efficient way for them to
+communicate together is to use the local network.  If a Tox client is opened on
+a local network in which another Tox client exists then good behavior would be
+to bootstrap to the network using the Tox client on the local network.  This is
+what LAN discovery aims to accomplish.
+
+LAN discovery works by sending a UDP packet through the toxcore UDP socket to
+the interface broadcast address on IPv4, the global broadcast address
+(255.255.255.255) and the multicast address on IPv6 (FF02::1) on the default
+Tox UDP port (33445).
+
+The LAN Discovery packet:
+
+\begin{tabular}{l|l}
+  Length             & Contents \\
+  \hline
+  \texttt{1}         & \texttt{uint8\_t} (33) \\
+  \texttt{32}        & DHT public key \\
+\end{tabular}
+
+LAN Discovery packets contain the DHT public key of the sender.  When a LAN
+Discovery packet is received, a DHT get nodes packet will be sent to the sender
+of the packet.  This means that the DHT instance will bootstrap itself to every
+peer from which it receives one of these packets.  Through this mechanism, Tox
+clients will bootstrap themselves automatically from other Tox clients running
+on the local network.
+
+When enabled, toxcore sends these packets every 10 seconds to keep delays low.
+The packets could be sent up to every 60 seconds but this would make peer
+finding over the network 6 times slower.
+
+LAN discovery enables two friends on a local network to find each other as the
+DHT prioritizes LAN addresses over non LAN addresses for DHT peers.  Sending a
+get node request/bootstrapping from a peer successfully should also add them to
+the list of DHT peers if we are searching for them.  The peer must not be
+immediately added if a LAN discovery packet with a DHT public key that we are
+searching for is received as there is no cryptographic proof that this packet
+is legitimate and not maliciously crafted.  This means that a DHT get node or
+ping packet must be sent, and a valid response must be received, before we can
+say that this peer has been found.
+
+LAN discovery is how Tox handles and makes everything work well on LAN.

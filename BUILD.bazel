@@ -1,5 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_library")
 load("//third_party/haskell/hspec-discover:build_defs.bzl", "hspec_test")
+load("//third_party/pandoc:build_defs.bzl", "pandoc_doc")
 load("//tools/project:build_defs.bzl", "project")
 
 project(
@@ -8,8 +9,102 @@ project(
 )
 
 haskell_library(
+    name = "tox-tcp",
+    srcs = [
+        "src/Tox/Network/TCP/Client.lhs",
+        "src/Tox/Network/TCP/Connections.lhs",
+        "src/Tox/Network/TCP/Server.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third_party/haskell:base",
+    ],
+)
+
+haskell_library(
+    name = "tox-discovery",
+    srcs = [
+        "src/Tox/Network/Discovery/LAN.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third_party/haskell:base",
+    ],
+)
+
+haskell_library(
+    name = "tox-transport",
+    srcs = [
+        "src/Tox/Transport/Reliability.lhs",
+        "src/Tox/Transport/SecureSession.lhs",
+        "src/Tox/Transport/Stream.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third_party/haskell:base",
+    ],
+)
+
+haskell_library(
+    name = "tox-onion",
+    srcs = [
+        "src/Tox/Onion/Path.lhs",
+        "src/Tox/Onion/RPC.lhs",
+        "src/Tox/Onion/Tunnel.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third_party/haskell:base",
+    ],
+)
+
+haskell_library(
+    name = "tox-session",
+    srcs = [
+        "src/Tox/Session/Connection.lhs",
+        "src/Tox/Session/Friend.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third_party/haskell:base",
+    ],
+)
+
+haskell_library(
     name = "hs-toxcore",
-    srcs = glob(["src/**/*.*hs"]),
+    srcs = [
+        "src/Tox.lhs",
+    ],
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
     tags = [
@@ -19,7 +114,71 @@ haskell_library(
     version = "0.2.12",
     visibility = ["//visibility:public"],
     deps = [
-        "//hs-msgpack-arbitrary",
+        ":tox-application",
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-crypto-keyed",
+        ":tox-dht",
+        ":tox-discovery",
+        ":tox-network",
+        ":tox-onion",
+        ":tox-persistence",
+        ":tox-session",
+        ":tox-tcp",
+        ":tox-transport",
+        "//third_party/haskell:base",
+    ],
+)
+
+haskell_library(
+    name = "tox-core",
+    srcs = [
+        "src/Tox/Core/Bits.hs",
+        "src/Tox/Core/Bits/Get.hs",
+        "src/Tox/Core/Bits/Put.hs",
+        "src/Tox/Core/PingArray.lhs",
+        "src/Tox/Core/Time.hs",
+        "src/Tox/Core/Timed.hs",
+        "src/Tox/Core/TypeName.hs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//third_party/haskell:MonadRandom",
+        "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:clock",
+        "//third_party/haskell:mtl",
+    ],
+)
+
+haskell_library(
+    name = "tox-crypto",
+    srcs = [
+        "src/Tox/Crypto.lhs",
+        "src/Tox/Crypto/Box.lhs",
+        "src/Tox/Crypto/CombinedKey.lhs",
+        "src/Tox/Crypto/Key.lhs",
+        "src/Tox/Crypto/KeyPair.lhs",
+        "src/Tox/Crypto/Keyed.hs",
+        "src/Tox/Crypto/Nonce.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
         "//hs-msgpack-binary",
         "//hs-msgpack-types",
         "//third_party/haskell:MonadRandom",
@@ -28,27 +187,212 @@ haskell_library(
         "//third_party/haskell:base16-bytestring",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
-        "//third_party/haskell:clock",
-        "//third_party/haskell:containers",
-        "//third_party/haskell:entropy",
-        "//third_party/haskell:integer-gmp",
-        "//third_party/haskell:iproute",
-        "//third_party/haskell:lens-family",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
+        "//third_party/haskell:saltine",
+    ],
+)
+
+haskell_library(
+    name = "tox-network",
+    srcs = [
+        "src/Tox/Network.lhs",
+        "src/Tox/Network/Backend.lhs",
+        "src/Tox/Network/Binary.hs",
+        "src/Tox/Network/Encoding.hs",
+        "src/Tox/Network/HostAddress.lhs",
+        "src/Tox/Network/MonadRandomBytes.hs",
+        "src/Tox/Network/Networked.hs",
+        "src/Tox/Network/NodeInfo.lhs",
+        "src/Tox/Network/Packet.lhs",
+        "src/Tox/Network/PacketKind.lhs",
+        "src/Tox/Network/PortNumber.lhs",
+        "src/Tox/Network/Protocol.lhs",
+        "src/Tox/Network/SocketAddress.lhs",
+        "src/Tox/Network/TimedT.hs",
+        "src/Tox/Network/TransportProtocol.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
+        ":tox-crypto",
+        "//hs-msgpack-binary",
+        "//hs-msgpack-types",
+        "//third_party/haskell:MonadRandom",
+        "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:entropy",
+        "//third_party/haskell:iproute",
+        "//third_party/haskell:mtl",
         "//third_party/haskell:network",
+        "//third_party/haskell:random",
+        "//third_party/haskell:transformers",
+    ],
+)
+
+haskell_library(
+    name = "tox-crypto-keyed",
+    srcs = [
+        "src/Tox/Crypto/KeyedT.hs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-network",
+        "//third_party/haskell:base",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:mtl",
+    ],
+)
+
+haskell_library(
+    name = "tox-dht",
+    srcs = [
+        "src/Tox/DHT.lhs",
+        "src/Tox/DHT/ClientList.lhs",
+        "src/Tox/DHT/ClientNode.lhs",
+        "src/Tox/DHT/DhtPacket.lhs",
+        "src/Tox/DHT/DhtRequestPacket.lhs",
+        "src/Tox/DHT/DhtState.lhs",
+        "src/Tox/DHT/Distance.lhs",
+        "src/Tox/DHT/KBuckets.lhs",
+        "src/Tox/DHT/NodeList.lhs",
+        "src/Tox/DHT/NodesRequest.lhs",
+        "src/Tox/DHT/NodesResponse.lhs",
+        "src/Tox/DHT/Operation.lhs",
+        "src/Tox/DHT/PendingReplies.lhs",
+        "src/Tox/DHT/PingPacket.lhs",
+        "src/Tox/DHT/RpcPacket.lhs",
+        "src/Tox/DHT/Stamped.hs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-crypto-keyed",
+        ":tox-network",
+        "//hs-msgpack-binary",
+        "//hs-msgpack-types",
+        "//third_party/haskell:MonadRandom",
+        "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:integer-gmp",
+        "//third_party/haskell:lens-family",
+        "//third_party/haskell:mtl",
         "//third_party/haskell:random",
         "//third_party/haskell:saltine",
         "//third_party/haskell:transformers",
     ],
 )
 
+haskell_library(
+    name = "tox-persistence",
+    srcs = [
+        "src/Tox/Persistence.lhs",
+        "src/Tox/Persistence/Bytes.lhs",
+        "src/Tox/Persistence/Conferences.lhs",
+        "src/Tox/Persistence/DHT.lhs",
+        "src/Tox/Persistence/Friend.lhs",
+        "src/Tox/Persistence/Groups.lhs",
+        "src/Tox/Persistence/Nodes.hs",
+        "src/Tox/Persistence/Util.hs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-network",
+        "//hs-msgpack-arbitrary",
+        "//hs-msgpack-binary",
+        "//hs-msgpack-types",
+        "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:monad-validate",
+        "//third_party/haskell:saltine",
+    ],
+)
+
+haskell_library(
+    name = "tox-application",
+    srcs = [
+        "src/Tox/Application/GroupChat.lhs",
+        "src/Tox/Application/GroupChatPackets.lhs",
+        "src/Tox/Application/LegacyGroup.lhs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-network",
+        "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:monad-validate",
+    ],
+)
+
+pandoc_doc(
+    name = "tox-spec",
+    src = "src/Tox.lhs",
+    out = "tox-spec.md",
+    data = glob([
+        "src/**/*.lhs",
+        "test/**/*.lhs",
+    ]),
+)
+
 hspec_test(
     name = "testsuite",
-    size = "small",
     ghcopts = ["-j4"],
     deps = [
         ":hs-toxcore",
+        ":tox-application",
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-crypto-keyed",
+        ":tox-dht",
+        ":tox-network",
+        ":tox-persistence",
         "//hs-msgpack-binary",
         "//hs-msgpack-types",
         "//third_party/haskell:QuickCheck",

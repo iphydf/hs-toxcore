@@ -10,6 +10,7 @@ haskell_binary(
     visibility = ["//tools/haskell:__pkg__"],
     deps = [
         "//hs-toxcore",
+        "//hs-toxcore:tox-persistence",
         "//third_party/haskell:base",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
@@ -30,6 +31,7 @@ haskell_test(
     deps = [
         "//c-toxcore",
         "//hs-toxcore",
+        "//hs-toxcore:tox-persistence",
         "//third_party/haskell:QuickCheck",
         "//third_party/haskell:base",
         "//third_party/haskell:binary",

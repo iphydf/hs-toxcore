@@ -6,10 +6,10 @@ import qualified Data.ByteString.Lazy    as LBS
 import           Foreign.C.String        (CString, peekCString)
 import           Foreign.C.Types         (CInt (..), CSize (..))
 import           Foreign.Ptr             (FunPtr, Ptr, nullPtr)
-import           Network.Tox.SaveData    (SaveData)
 import           Test.QuickCheck         (Args (..), Property, quickCheckWith,
                                           stdArgs)
 import           Test.QuickCheck.Monadic (assert, monadicIO, run)
+import           Tox.Persistence         (SaveData)
 
 foreign import ccall tox_options_new :: Ptr () -> IO (Ptr ())
 foreign import ccall tox_options_free :: Ptr () -> IO ()

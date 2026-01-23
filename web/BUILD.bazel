@@ -10,7 +10,9 @@ haskell_binary(
     visibility = ["//visibility:public"],
     deps = [
         "//hs-msgpack-binary",
+        "//hs-msgpack-types",
         "//hs-toxcore",
+        "//hs-toxcore:tox-persistence",
         "//third_party/haskell:QuickCheck",
         "//third_party/haskell:base",
         "//third_party/haskell:binary",

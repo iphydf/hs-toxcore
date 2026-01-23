@@ -1,0 +1,108 @@
+\begin{code}
+{-# LANGUAGE StrictData #-}
+module Tox.Network.TCP.Connections where
+\end{code}
+
+\chapter{TCP connections}
+
+\texttt{TCP\_connections} takes care of handling multiple TCP client instances
+to establish a reliable connection via TCP relays to a friend.  Connecting to a
+friend with only one relay would not be very reliable, so
+\texttt{TCP\_connections} provides the level of abstraction needed to manage
+multiple relays.  For example, it ensures that if a relay goes down, the
+connection to the peer will not be impacted.  This is done by connecting to the
+other peer with more than one relay.
+
+\texttt{TCP\_connections} is above \href{#tcp-client}{\texttt{TCP client}} and
+below \texttt{net\_crypto}.
+
+A TCP connection in \texttt{TCP\_connections} is defined as a connection to a
+peer though one or more TCP relays.  To connect to another peer with
+\texttt{TCP\_connections}, a connection in \texttt{TCP\_connections} to the peer
+with DHT public key X will be created.  Some TCP relays which we know the peer
+is connected to will then be associated with that peer.  If the peer isn't
+connected directly yet, these relays will be the ones that the peer has sent to
+us via the onion module.  The peer will also send some relays it is directly
+connected to once a connection is established, however, this is done by another
+module.
+
+\texttt{TCP\_connections} has a list of all relays it is connected to.  It tries
+to keep the number of relays it is connected to as small as possible in order
+to minimize load on relays and lower bandwidth usage for the client.  The
+desired number of TCP relay connections per peer is set to 3 in toxcore with
+the maximum number set to 6.  The reason for these numbers is that 1 would mean
+no backup relays and 2 would mean only 1 backup.  To be sure that the
+connection is reliable 3 seems to be a reasonable lower bound.  The maximum
+number of 6 is the maximum number of relays that can be tied to each peer.  If
+2 peers are connected each to the same 6+ relays and they both need to be
+connected to that amount of relays because of other friends this is where this
+maximum comes into play.  There is no reason why this number is 6 but in
+toxcore it has to be at least double than the desired number (3) because the
+code assumes this.
+
+If necessary, \texttt{TCP\_connections} will connect to TCP relays to use them
+to send onion packets.  This is only done if there is no UDP connection to the
+network.  When there is a UDP connection, packets are sent with UDP only
+because sending them with TCP relays can be less reliable.  It is also
+important that we are connected at all times to some relays as these relays
+will be used by TCP only peers to initiate a connection to us.
+
+In toxcore, each client is connected to 3 relays even if there are no TCP peers
+and the onion is not needed.  It might be optimal to only connect to these
+relays when toxcore is initializing as this is the only time when peers will
+connect to us via TCP relays we are connected to.  Due to how the onion works,
+after the initialization phase, where each peer is searched in the onion and
+then if they are found the info required to connect back (DHT pk, TCP relays)
+is sent to them, there should be no more peers connecting to us via TCP relays.
+This may be a way to further reduce load on TCP relays, however, more research
+is needed before it is implemented.
+
+\texttt{TCP\_connections} picks one relay and uses only it for sending data to
+the other peer.  The reason for not picking a random connected relay for each
+packet is that it severely deteriorates the quality of the link between two
+peers and makes performance of lossy video and audio transmissions really poor.
+For this reason, one relay is picked and used to send all data.  If for any
+reason no more data can be sent through that relay, the next relay is used.
+This may happen if the TCP socket is full and so the relay should not
+necessarily be dropped if this occurs.  Relays are only dropped if they time
+out or if they become useless (if the relay is one too many or is no longer
+being used to relay data to any peers).
+
+\texttt{TCP\_connections} in toxcore also contains a mechanism to make
+connections go to sleep.  TCP connections to other peers may be put to sleep if
+the connection to the peer establishes itself with UDP after the connection is
+established with TCP.  UDP is the method preferred by \texttt{net\_crypto} to
+communicate with other peers.  In order to keep track of the relays which were
+used to connect with the other peer in case the UDP connection fails, they are
+saved by \texttt{TCP\_connections} when the connection is put to sleep.  Any
+relays which were only used by this redundant connection are saved then
+disconnected from.  If the connection is awakened, the relays are reconnected
+to and the connection is reestablished.  Putting a connection to sleep is the
+same as saving all the relays used by the connection and removing the
+connection.  Awakening the connection is the same as creating a new connection
+with the same parameters and restoring all the relays.
+
+A method to detect potentially dysfunctional relays that try to disrupt the
+network by lying that they are connecting to a peer when they are not or that
+maliciously drop all packets should be considered.  Toxcore doesn't currently
+implement such a system and adding one requires more research and likely also
+requires extending the protocol.
+
+When TCP connections connects to a relay it will create a new
+\href{#tcp-client}{\texttt{TCP\_client}} instance for that relay.  At any time
+if the \texttt{TCP\_client} instance reports that it has disconnected, the TCP
+relay will be dropped.  Once the TCP relay reports that it is connected,
+\texttt{TCP\_connections} will find all the connections that are associated to
+the relay and announce to the relay that it wants to connect to each of them
+with routing requests.  If the relay reports that the peer for a connection is
+online, the connection number and relay will be used to send data in that
+connection with data packets.  If the peer isn't reported as online but the
+relay is associated to a connection, TCP OOB (out of band) packets will be used
+to send data instead of data packets.  TCP OOB packets are used in this case
+since the relay most likely has the peer connected but it has not sent a
+routing request to connect to us.
+
+\texttt{TCP\_connections} is used as the bridge between individual
+\texttt{TCP\_client} instances and \texttt{net\_crypto}, or the bridge between
+individual connections and something that requires an interface that looks like
+one connection.

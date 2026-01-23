@@ -3,9 +3,9 @@ module Main (main) where
 import qualified Data.Binary                as Binary
 import qualified Data.ByteString.Lazy       as LBS
 import qualified Data.ByteString.Lazy.Char8 as LBS8
-import           Network.Tox.SaveData       (SaveData)
 import           Text.Groom                 (groom)
 import           Text.Read                  (readMaybe)
+import           Tox.Persistence            (SaveData)
 
 
 parse :: LBS.ByteString -> LBS.ByteString

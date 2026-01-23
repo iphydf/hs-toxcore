@@ -7,7 +7,7 @@ import           System.Environment          (getArgs, getEnv)
 import           System.IO                   (BufferMode (..), hSetBuffering,
                                               stdout)
 
-import qualified Network.Tox.App             as App
+import qualified Tox.App                     as App
 
 -- Run the server.
 runTestServer :: Port -> IO ()
