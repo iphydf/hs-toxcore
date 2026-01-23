@@ -6,16 +6,27 @@ module Tox.DHT.OperationSpec where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Control.Monad        (when)
-import           Control.Monad.Writer (execWriterT)
-import qualified Data.Map             as Map
+import           Control.Monad          (when)
+import           Control.Monad.Identity (runIdentity)
+import           Control.Monad.Random   (evalRandT)
+import           Control.Monad.State    (runStateT)
+import           Control.Monad.Writer   (execWriterT)
+import           Data.List              (isInfixOf)
+import qualified Data.Map               as Map
 
-import qualified Tox.Core.Time        as Time
-import qualified Tox.Crypto.KeyPair   as KeyPair
-import qualified Tox.DHT.DhtState     as DhtState
-import qualified Tox.DHT.Operation    as Operation
-import qualified Tox.Network.NodeInfo as NodeInfo
-import           Tox.Network.NodeInfo (NodeInfo)
+import qualified Tox.Core.Time          as Time
+import qualified Tox.Crypto.KeyedT      as KeyedT
+import qualified Tox.Crypto.KeyPair     as KeyPair
+import qualified Tox.DHT.DhtState       as DhtState
+import           Tox.DHT.NodesResponse  (NodesResponse (..))
+import qualified Tox.DHT.Operation      as Operation
+import           Tox.DHT.PingPacket     (PingPacket (..))
+import           Tox.DHT.RpcPacket      (RequestId (..), RpcPacket (..))
+import qualified Tox.DHT.Stamped        as Stamped
+import qualified Tox.Network.Networked  as Networked
+import           Tox.Network.NodeInfo   (NodeInfo)
+import qualified Tox.Network.NodeInfo   as NodeInfo
+import qualified Tox.Network.TimedT     as TimedT
 
 spec :: Spec
 spec = do
@@ -84,3 +95,28 @@ spec = do
             . execWriterT $ Operation.checkNodes
         in
         when viable $ map Operation.requestTo checks `shouldSatisfy` (nodeInfo `elem`)
+
+  describe "handleNodesResponse" $ do
+    it "adds the sender to the DHT state" $ property $
+      \(seed :: Operation.ArbStdGen) (time :: Time.Timestamp) (from :: NodeInfo) (rid :: RequestId) (nodes :: [NodeInfo]) ->
+        let dhtState = Operation.initTestDhtState seed time
+            -- Pre-add the reply expectation so checkPending succeeds
+            expecting = DhtState.empty time (DhtState.dhtKeyPair dhtState)
+            expectingWithReply = expecting { DhtState.dhtPendingReplies = Stamped.add time (from, rid) Map.empty }
+            response = RpcPacket (NodesResponse nodes) rid
+            finalState = Operation.execTestDhtNode seed time expectingWithReply (Operation.handleNodesResponse from response)
+        in DhtState.containsNode (NodeInfo.publicKey from) finalState `shouldBe` True
+
+  describe "handlePingRequest" $ do
+    it "sends a ping response" $ property $
+      \(seed :: Operation.ArbStdGen) (time :: Time.Timestamp) (from :: NodeInfo) (rid :: RequestId) ->
+        let dhtState = Operation.initTestDhtState seed time
+            ((_, _), events) = runIdentity
+              . Networked.runNetworkLogged
+              . (`runStateT` dhtState)
+              . (`evalRandT` Operation.unwrapArbStdGen seed)
+              . (`TimedT.runTimedT` time)
+              . (`KeyedT.evalKeyedT` Map.empty)
+              $ Operation.handlePingRequest from (RpcPacket PingRequest rid)
+            isPingResponse event = ("packetKind = PingResponse" `isInfixOf` event) && (show from `isInfixOf` event)
+        in events `shouldSatisfy` any isPingResponse
