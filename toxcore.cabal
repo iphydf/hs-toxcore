@@ -173,6 +173,10 @@ test-suite testsuite
   main-is:            testsuite.hs
   other-modules:
     Data.Result
+    Tox.Core.Bits.GetSpec
+    Tox.Core.Bits.PutSpec
+    Tox.Core.BitsSpec
+    Tox.Core.TimeSpec
     Tox.Crypto.BoxSpec
     Tox.Crypto.CombinedKeySpec
     Tox.Crypto.KeyPairSpec
@@ -180,20 +184,25 @@ test-suite testsuite
     Tox.Crypto.NonceSpec
     Tox.CryptoSpec
     Tox.DHT.ClientListSpec
+    Tox.DHT.ClientNodeSpec
     Tox.DHT.DhtPacketSpec
     Tox.DHT.DhtRequestPacketSpec
     Tox.DHT.DhtStateSpec
     Tox.DHT.DistanceSpec
     Tox.DHT.KBucketsSpec
+    Tox.DHT.NodeListSpec
+    Tox.DHT.NodeSpec
     Tox.DHT.NodesRequestSpec
     Tox.DHT.NodesResponseSpec
     Tox.DHT.OperationSpec
     Tox.DHT.PendingRepliesSpec
     Tox.DHT.PingPacketSpec
     Tox.DHT.RpcPacketSpec
+    Tox.DHT.StampedSpec
     Tox.DHTSpec
     Tox.Network.EncodingSpec
     Tox.Network.HostAddressSpec
+    Tox.Network.MonadRandomBytesSpec
     Tox.Network.NodeInfoSpec
     Tox.Network.PacketKindSpec
     Tox.Network.PacketSpec
@@ -204,6 +213,12 @@ test-suite testsuite
     Tox.Onion.PathSpec
     Tox.Onion.RPCSpec
     Tox.Onion.TunnelSpec
+    Tox.Persistence.BytesSpec
+    Tox.Persistence.ConferencesSpec
+    Tox.Persistence.DHTSpec
+    Tox.Persistence.FriendSpec
+    Tox.Persistence.GroupsSpec
+    Tox.Persistence.NodesSpec
     Tox.PersistenceSpec
 
   build-tool-depends: hspec-discover:hspec-discover
