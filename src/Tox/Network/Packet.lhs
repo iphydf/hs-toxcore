@@ -1,5 +1,6 @@
 \begin{code}
 {-# LANGUAGE DeriveDataTypeable #-}
+{-# LANGUAGE DeriveFunctor      #-}
 {-# LANGUAGE DeriveGeneric      #-}
 {-# LANGUAGE StrictData         #-}
 module Tox.Network.Packet where
@@ -38,7 +39,7 @@ data Packet payload = Packet
   { packetKind    :: PacketKind
   , packetPayload :: payload
   }
-  deriving (Eq, Read, Show, Generic, Typeable)
+  deriving (Eq, Read, Show, Generic, Typeable, Functor)
 
 instance Binary payload => Binary (Packet payload)
 instance MessagePack payload => MessagePack (Packet payload)

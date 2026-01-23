@@ -278,6 +278,7 @@ haskell_library(
         "src/Tox/DHT/PendingReplies.lhs",
         "src/Tox/DHT/PingPacket.lhs",
         "src/Tox/DHT/RpcPacket.lhs",
+        "src/Tox/DHT/Server.hs",
         "src/Tox/DHT/Stamped.hs",
     ],
     ghcopts = ["-j4"],
@@ -368,6 +369,36 @@ haskell_library(
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
         "//third_party/haskell:monad-validate",
+    ],
+)
+
+haskell_library(
+    name = "tox-conduit",
+    srcs = [
+        "src/Tox/Conduit/DHT.hs",
+        "src/Tox/Conduit/Encoding.hs",
+        "src/Tox/Conduit/Network.hs",
+    ],
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-network",
+        "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:conduit",
+        "//third_party/haskell:conduit-extra",
+        "//third_party/haskell:mtl",
+        "//third_party/haskell:network",
+        "//third_party/haskell:transformers",
     ],
 )
 
