@@ -1,61 +1,44 @@
+{-# LANGUAGE LambdaCase #-}
 module Main (main) where
 
+import           Control.Monad           (unless)
 import qualified Data.Binary             as Binary
 import qualified Data.ByteString         as BS
 import qualified Data.ByteString.Lazy    as LBS
-import           Foreign.C.String        (CString, peekCString)
-import           Foreign.C.Types         (CInt (..), CSize (..))
-import           Foreign.Ptr             (FunPtr, Ptr, nullPtr)
-import           Test.QuickCheck         (Args (..), Property, quickCheckWith,
-                                          stdArgs)
+import           Data.Either             (isRight)
+import           Network.Tox.C           (LogCallback, LogLevel (..),
+                                          Options (..), SavedataType (..),
+                                          defaultOptions, withToxLogging)
+import           System.Exit             (exitFailure)
+import           Test.QuickCheck         (Args (..), Property, isSuccess,
+                                          quickCheckWithResult, stdArgs)
 import           Test.QuickCheck.Monadic (assert, monadicIO, run)
 import           Tox.Persistence         (SaveData)
 
-foreign import ccall tox_options_new :: Ptr () -> IO (Ptr ())
-foreign import ccall tox_options_free :: Ptr () -> IO ()
+logLevelName :: LogLevel -> Char
+logLevelName = \case
+    LogLevelTrace   -> 'T'
+    LogLevelDebug   -> 'D'
+    LogLevelInfo    -> 'I'
+    LogLevelWarning -> 'W'
+    LogLevelError   -> 'E'
 
-foreign import ccall tox_options_set_savedata_type :: Ptr () -> CInt -> IO ()
-foreign import ccall tox_options_set_savedata_data :: Ptr () -> CString -> CSize -> IO ()
-
-foreign import ccall tox_new :: Ptr () -> Ptr () -> IO (Ptr ())
-foreign import ccall tox_kill :: Ptr () -> IO ()
-
-type LogCb = Ptr () -> CInt -> CString -> CInt -> CString -> CString -> Ptr () -> IO ()
-foreign import ccall tox_options_set_log_callback :: Ptr () -> FunPtr LogCb -> IO ()
-foreign import ccall "wrapper" wrapLogCb :: LogCb -> IO (FunPtr LogCb)
-
-logLevelName :: CInt -> Char
-logLevelName 0 = 'T'
-logLevelName 1 = 'D'
-logLevelName 2 = 'I'
-logLevelName 3 = 'W'
-logLevelName 4 = 'E'
-logLevelName _ = '?'
-
-logHandler :: LogCb
-logHandler _ cLevel cFile line cFunc cMsg _ = do
-    file <- peekCString cFile
-    func <- peekCString cFunc
-    msg <- peekCString cMsg
-    case cLevel of
-        0 -> return ()
-        _ -> putStrLn $ logLevelName cLevel : ' ' : file <> ":" <> show line <> "(" <> func <> "): " <> msg
+logHandler :: LogCallback
+logHandler LogLevelTrace _ _ _ _ = return ()
+logHandler level file line func msg =
+    putStrLn $ logLevelName level : ' ' : file <> ":" <> show line <> "(" <> func <> "): " <> msg
 
 prop_Save :: SaveData -> Property
 prop_Save save = monadicIO $ do
-    ok <- run $ BS.useAsCStringLen (LBS.toStrict (Binary.encode save)) $ \(saveData, saveLenInt) -> do
-        putStrLn $ "\nsavedata size: " <> show saveLenInt
-        opts <- tox_options_new nullPtr
-        tox_options_set_savedata_type opts 1
-        tox_options_set_savedata_data opts saveData (fromIntegral saveLenInt)
-        tox_options_set_log_callback opts =<< wrapLogCb logHandler
-        tox <- tox_new opts nullPtr
-        let isNull = tox == nullPtr
-        tox_kill tox
-        tox_options_free opts
-        return $ not isNull
+    ok <- run $ do
+        let saveData = LBS.toStrict (Binary.encode save)
+        putStrLn $ "\nsavedata size: " <> show (BS.length saveData)
+        opts <- either (fail . show) return =<< defaultOptions
+        isRight <$> withToxLogging opts{savedataType=SavedataTypeToxSave, savedata=saveData} logHandler (const (return ()))
     assert ok
 
 
 main :: IO ()
-main = quickCheckWith stdArgs{maxSuccess=100, maxSize=30} prop_Save
+main = do
+    result <- quickCheckWithResult stdArgs{maxSuccess=100, maxSize=30} prop_Save
+    unless (isSuccess result) exitFailure

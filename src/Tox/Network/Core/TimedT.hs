@@ -10,6 +10,7 @@ import           Control.Monad.State              (MonadState)
 import           Control.Monad.Trans              (MonadTrans)
 import           Control.Monad.Writer             (MonadWriter)
 
+import           Tox.Core.Log                     (MonadLog)
 import           Tox.Core.Time                    (Timestamp)
 import           Tox.Core.Timed                   (Timed (..))
 import           Tox.Crypto.Core.Keyed            (Keyed)
@@ -18,7 +19,7 @@ import           Tox.Network.Core.Networked       (Networked)
 
 newtype TimedT m a = TimedT (ReaderT Timestamp m a)
   deriving (Monad, Applicative, Functor, MonadState s, MonadWriter w
-    , MonadRandomBytes, MonadTrans, MonadIO, Networked, Keyed)
+    , MonadRandomBytes, MonadTrans, MonadIO, Networked, Keyed, MonadLog)
 
 runTimedT :: TimedT m a -> Timestamp -> m a
 runTimedT (TimedT m) = runReaderT m

@@ -9,6 +9,7 @@ import           Control.Monad.RWS         (RWST)
 import           Control.Monad.State       (StateT)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Writer      (WriterT)
+import           Crypto.Saltine.Core.Utils (randomByteString)
 import           Data.Binary               (get)
 import           Data.Binary.Get           (Get, getWord16be, getWord32be,
                                             getWord64be, getWord8, runGet)
@@ -16,7 +17,6 @@ import           Data.ByteString           (ByteString, pack, unpack)
 import           Data.ByteString.Lazy      (fromStrict)
 import           Data.Proxy                (Proxy (..))
 import           Data.Word                 (Word16, Word32, Word64, Word8)
-import           System.Entropy            (getEntropy)
 import           System.Random             (RandomGen)
 
 
@@ -36,7 +36,7 @@ instance (Monad m, Applicative m, RandomGen s) => MonadRandomBytes (RandT s m) w
 
 -- | cryptographically secure random bytes from system source
 instance MonadRandomBytes IO where
-  randomBytes = getEntropy
+  randomBytes = randomByteString
   newKeyPair = KeyPair.newKeyPair
 
 instance MonadRandomBytes m => MonadRandomBytes (ReaderT r m) where

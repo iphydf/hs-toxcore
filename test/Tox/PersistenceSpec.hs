@@ -3,6 +3,7 @@
 module Tox.PersistenceSpec where
 
 import           Test.Hspec
+import           Test.Hspec.QuickCheck         (modifyMaxSize)
 
 import qualified Data.Binary                   as Binary (get)
 import qualified Data.Binary.Get               as Binary (Get)
@@ -14,7 +15,9 @@ import           Tox.Persistence               (SaveData)
 
 spec :: Spec
 spec = do
-  binarySpec (Proxy :: Proxy SaveData)
+  -- Each kind of section has its own spec at full size. This is how they go
+  -- together, which small sections show as well.
+  modifyMaxSize (const 10) $ binarySpec (Proxy :: Proxy SaveData)
 
   it "should handle invalid magic numbers" $ do
     expectDecoderFail [0x00, 0x00, 0x00, 0x01]

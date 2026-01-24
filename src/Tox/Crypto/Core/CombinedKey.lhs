@@ -6,8 +6,8 @@ module Tox.Crypto.Core.CombinedKey where
 
 import qualified Crypto.Saltine.Core.Box as Sodium (beforeNM)
 
-import           Tox.Crypto.Core.Key          (CombinedKey, Key (..), PublicKey,
-                                          SecretKey)
+import           Tox.Crypto.Core.Key     (CombinedKey, PublicKey, SecretKey,
+                                          fromSodium, toSodium)
 
 
 {-------------------------------------------------------------------------------
@@ -28,8 +28,8 @@ key.
 \begin{code}
 
 precompute :: SecretKey -> PublicKey -> CombinedKey
-precompute (Key sk) (Key pk) =
-  Key $ Sodium.beforeNM sk pk
+precompute sk pk =
+  fromSodium $ Sodium.beforeNM (toSodium sk) (toSodium pk)
 
 \end{code}
 

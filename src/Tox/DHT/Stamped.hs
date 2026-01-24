@@ -46,9 +46,3 @@ popFirst stamped =
       (_, [])       -> popFirst $ Map.fromAscList assocs
       (stamp, [a])  -> (Just (stamp, a), Map.fromAscList assocs)
       (stamp, a:as) -> (Just (stamp, a), Map.fromAscList $ (stamp, as):assocs)
-
-{-------------------------------------------------------------------------------
- -
- - :: Tests.
- -
- ------------------------------------------------------------------------------}

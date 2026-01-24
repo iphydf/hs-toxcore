@@ -8,12 +8,8 @@ import           Test.QuickCheck
 import           Control.Monad.Identity      (runIdentity)
 import           Control.Monad.Random        (evalRandT)
 import           Control.Monad.State         (runStateT)
-import           Data.Binary                 (Binary, encode)
-import qualified Data.ByteString             as BS
-import qualified Data.ByteString.Lazy        as LBS
-import           Data.List                   (isInfixOf)
-import qualified Data.Map                    as Map
 
+import           Tox.Core.Log                (runNoLog)
 import           Tox.Core.Time
 import qualified Tox.Crypto.Core.Keyed       as KeyedT
 import qualified Tox.Crypto.Core.KeyPair     as KP
@@ -44,9 +40,7 @@ spec = do
       \(seed :: ArbStdGen) (time :: Timestamp) (from :: NodeInfo) (rid :: RequestId) ->
         let dhtState = initTestDhtState seed time
             kp = dhtKeyPair dhtState
-            -- Construct a valid DhtPacket containing a PingRequest RPC
             rpc = RpcPacket Ping.PingRequest rid
-            -- Use dummy nonce
             nonce = read "\"000000000000000000000000000000000000000000000000\""
             dhtPkt = DhtPacket.encode kp (KP.publicKey kp) nonce rpc
             packet = Packet PacketKind.PingRequest (Encoding.encode dhtPkt)
@@ -54,8 +48,9 @@ spec = do
             ((_, _), events) = runIdentity
               . Networked.runNetworkLogged
               . (`runStateT` dhtState)
+              . runNoLog
               . (`evalRandT` unwrapArbStdGen seed)
               . (`TimedT.runTimedT` time)
-              . (`KeyedT.evalKeyedT` Map.empty)
+              . (`KeyedT.evalKeyedT` KeyedT.emptyKeyRing)
               $ handleIncomingPacket from packet
         in any (\(Networked.SendPacket _ (Packet kind _)) -> kind == PacketKind.PingResponse) events

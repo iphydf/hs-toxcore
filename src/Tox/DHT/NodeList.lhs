@@ -5,18 +5,19 @@ the DHT State.
 {-# LANGUAGE StrictData #-}
 module Tox.DHT.NodeList where
 
-import           Control.Applicative  (Const (..), getConst)
-import           Control.Monad        (guard)
-import           Data.Maybe           (listToMaybe)
-import           Data.Monoid          (Dual (..), Endo (..), appEndo, getDual)
+import           Control.Applicative       (Const (..), getConst)
+import           Control.Monad             (guard)
+import           Data.Maybe                (listToMaybe)
+import           Data.Monoid               (Dual (..), Endo (..), appEndo,
+                                            getDual)
 
-import           Tox.Core.Time        (Timestamp)
+import           Tox.Core.Time             (Timestamp)
 import           Tox.Crypto.Core.Key       (PublicKey)
-import           Tox.DHT.ClientList   (ClientList)
-import qualified Tox.DHT.ClientList   as ClientList
-import           Tox.DHT.Distance     (Distance)
-import           Tox.DHT.KBuckets     (KBuckets)
-import qualified Tox.DHT.KBuckets     as KBuckets
+import qualified Tox.DHT.ClientList        as ClientList
+import           Tox.DHT.ClientList        (ClientList)
+import           Tox.DHT.Distance          (Distance)
+import qualified Tox.DHT.KBuckets          as KBuckets
+import           Tox.DHT.KBuckets          (KBuckets)
 import           Tox.Network.Core.NodeInfo (NodeInfo)
 
 class NodeList l where
@@ -63,6 +64,7 @@ instance NodeList ClientList where
   baseKey = ClientList.baseKey
   traverseClientLists = id
   closeNodes = ClientList.closeNodes
+  lookupPublicKey = ClientList.lookup
 
 instance NodeList KBuckets where
   addNode = KBuckets.addNode
@@ -71,4 +73,5 @@ instance NodeList KBuckets where
   baseKey = KBuckets.baseKey
   traverseClientLists = KBuckets.traverseClientLists
   closeNodes = KBuckets.closeNodes
+  lookupPublicKey = KBuckets.lookup
 \end{code}

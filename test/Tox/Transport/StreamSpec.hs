@@ -1,71 +1,52 @@
-{-# LANGUAGE OverloadedStrings #-}
-module Tox.Transport.StreamSpec where
+module Tox.Transport.StreamSpec (spec) where
 
-import           Data.Maybe                (isJust)
+import           Control.Exception    (evaluate)
+import           Data.List            (foldl')
 import           Test.Hspec
-import qualified Tox.Core.Time             as Time
-import           Tox.Transport.Reliability (SeqNum (..))
+
+import qualified Tox.Core.Time        as Time
+import           Tox.Evaluated        (fullyEvaluated)
 import           Tox.Transport.Stream
 
+-- | Samples 50 ms apart, with the same number of new packets before each and
+-- the same send queue length.
+steady :: Int -> Int -> Congestion -> Congestion
+steady perSample queue cc0 = foldl' step cc0 [1 .. 13]
+  where
+    step cc i = sample 0 queue False (Time.fromMillis (50 * i)) (iterate sentNew cc !! perSample)
+
 spec :: Spec
-spec = do
-  let t0 = Time.Timestamp 0
-      t1s = t0 `Time.addTime` Time.seconds 1
-      t12s = t0 `Time.addTime` Time.milliseconds 1200
-      t2s = t0 `Time.addTime` Time.seconds 2
-      t3s = t0 `Time.addTime` Time.seconds 3
+spec = describe "congestion control" $ do
+  it "keeps its samples evaluated, so they hold no older ones" $ do
+    cc <- evaluate $ sample 0 5 True (Time.fromMillis 1000) (steady 3 5 initState)
+    lists <- mapM evaluate [ccQueueSizes cc, ccSentHistory cc, ccResentHistory cc]
+    and <$> mapM fullyEvaluated lists `shouldReturn` True
 
-  describe "RTT tracking" $ do
-    it "updates RTT on ACK" $ do
-      let s0 = initState t0
-          s1 = recordPacketSent 1 t0 s0
-          s2 = recordPacketAcked 1 t1s s1
-      ssLastRTT s2 `shouldBe` Just (Time.seconds 1)
-      ssMinRTT s2 `shouldBe` Just (Time.seconds 1)
+  it "sends a fifth faster than it measured" $
+    ccSendRate (steady 3 0 initState) `shouldBe` 72
 
-    it "tracks minimum RTT" $ do
-      let s0 = initState t0
-          s1 = recordPacketSent 1 t0 s0
-          s2 = recordPacketAcked 1 t2s s1 -- RTT 2s
-          s3 = recordPacketSent 2 t2s s2
-          s4 = recordPacketAcked 2 t3s s3 -- RTT 1s
-      ssMinRTT s4 `shouldBe` Just (Time.seconds 1)
-      ssLastRTT s4 `shouldBe` Just (Time.seconds 1)
+  it "sends a tenth slower within a second of a congestion event" $
+    ccSendRate (steady 3 0 initState { ccLastCongestion = Just (Time.fromMillis 600) }) `shouldBe` 54
 
-  describe "Send Rate Calculation" $ do
-    it "starts at 8.0" $ do
-      ssCurrentSendRate (initState t0) `shouldBe` 8.0
+  it "slows down while the send queue holds more than two seconds" $
+    ccSendRate (steady 3 300 initState) `shouldBe` 24
 
-    it "ignores updates before 1.2s" $ do
-      let s0 = initState t0
-          s1 = recordPacketSent 1 t0 s0
-          s2 = updateSendRate 1 t1s s1
-      ssCurrentSendRate s2 `shouldBe` 8.0
+  it "refills its budget at the send rate, at most four samples' worth ahead" $ do
+    let start = refill (Time.fromMillis 0) initState { ccSendRate = 72 }
+    ccPacketsLeft start `shouldBe` minQueue
+    ccPacketsLeft (refill (Time.fromMillis 100) start) `shouldBe` minQueue + 7
+    ccPacketsLeft (refill (Time.fromMillis 1000) start) `shouldBe` minQueue + 4 * 4
 
-    it "calculates rate based on throughput" $ do
-      let s0 = initState t0
-          -- Q_prev = 0
-          -- Sent 24 packets in 1.2s
-          -- Q_now = 0
-          -- Throughput = (24 - 0) / 1.2 = 20.0
-          s1 = foldr (\s acc -> recordPacketSent (SeqNum s) t0 acc) s0 [1..24]
-          s2 = recordCongestion t0 s1 -- Force recently congested to avoid 1.25x
-          s3 = updateSendRate 0 t12s s2
-      ssCurrentSendRate s3 `shouldBe` 20.0
+  -- A session doesn't refill while it rests.
+  it "has the same budget after a quiet spell as if it had refilled all along" $ do
+    let start = refill (Time.fromMillis 0) initState { ccSendRate = 72, ccResendRate = 72 }
+        budget cc = (ccPacketsLeft cc, ccResendsLeft cc)
+        often = foldl' (flip refill) start (map (Time.fromMillis . (* 50)) [1 .. 1200])
+    budget (refill (Time.fromMillis 60000) start) `shouldBe` budget often
 
-    it "applies 1.25x increase when no congestion" $ do
-      let s0 = initState t0
-          -- Throughput = 10.0 (12 sent / 1.2s)
-          -- No congestion recently -> 10.0 * 1.25 = 12.5
-          s1 = foldr (\s acc -> recordPacketSent (SeqNum s) t0 acc) s0 [1..12]
-          s2 = updateSendRate 0 t12s s1
-      ssCurrentSendRate s2 `shouldBe` 12.5
-
-    it "applies floor of 8.0" $ do
-      let s0 = initState t0
-          -- Throughput = 1.0 (1.2 sent / 1.2s)
-          -- Recently congested -> floor to 8.0
-          s1 = recordPacketSent 1 t0 s0
-          s2 = recordCongestion t0 s1
-          s3 = updateSendRate 0 t12s s2
-      ssCurrentSendRate s3 `shouldBe` 8.0
+  it "counts resending its whole budget as a congestion event" $ do
+    let cc = refill (Time.fromMillis 0) initState
+        now = Time.fromMillis 10
+    ccLastCongestion (resent now 10 cc) `shouldBe` Nothing
+    ccPacketsLeft (resent now 10 cc) `shouldBe` minQueue - 10
+    ccLastCongestion (resent now minQueue cc) `shouldBe` Just now

@@ -2,13 +2,26 @@
 
 \begin{code}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
-{-# LANGUAGE DeriveDataTypeable         #-}
-{-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
-{-# LANGUAGE StandaloneDeriving         #-}
-{-# LANGUAGE StrictData                 #-}
-module Tox.Crypto.Core.Key where
+{-# LANGUAGE DeriveDataTypeable  #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE MagicHash           #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StandaloneDeriving  #-}
+{-# LANGUAGE StrictData          #-}
+module Tox.Crypto.Core.Key
+  ( CryptoNumber (..)
+  , Key
+  , PublicKey
+  , SecretKey
+  , CombinedKey
+  , Nonce
+  , Signature
+  , toSodium
+  , fromSodium
+  , keyToInteger
+  , decode
+  ) where
 
 import           Control.Monad                ((>=>))
 import           Control.Monad.Validate       (MonadValidate, refute)
@@ -22,19 +35,24 @@ import qualified Crypto.Saltine.Internal.Box  as Sodium (box_beforenmbytes,
                                                          box_publickeybytes,
                                                          box_secretkeybytes)
 import qualified Crypto.Saltine.Internal.Sign as Sodium (sign_bytes)
+import           Data.Array.Byte              (ByteArray (..))
 import           Data.Binary                  (Binary)
 import qualified Data.Binary                  as Binary (get, put)
-import qualified Data.Binary.Get              as Binary (getByteString, runGet)
-import qualified Data.Binary.Put              as Binary (putByteString)
+import qualified Data.Binary.Get              as Binary (getByteString)
+import qualified Data.Binary.Put              as Binary (putShortByteString)
 import qualified Data.ByteString              as ByteString
 import qualified Data.ByteString.Base16       as Base16
-import qualified Data.ByteString.Lazy         as LazyByteString
+import           Data.ByteString.Short        (ShortByteString (..))
+import qualified Data.ByteString.Short        as Short
+import           Data.Maybe                   (fromJust)
 import           Data.MessagePack             (DecodeError, MessagePack (..))
 import           Data.Proxy                   (Proxy (..))
 import           Data.String                  (fromString)
 import           Data.Typeable                (Typeable)
-import           Test.QuickCheck.Arbitrary    (Arbitrary, arbitrary)
+import           GHC.Exts                     (int2Word#, sizeofByteArray#)
+import           GHC.Num.Integer              (integerFromByteArray)
 import qualified Test.QuickCheck.Arbitrary    as Arbitrary
+import           Test.QuickCheck.Arbitrary    (Arbitrary, arbitrary)
 import           Text.Read                    (readPrec)
 
 
@@ -88,7 +106,8 @@ deriving instance Typeable Sodium.CombinedKey
 deriving instance Typeable Sodium.Nonce
 deriving instance Typeable Sodium.Signature
 
-newtype Key a = Key { unKey :: a }
+-- | Unpinned, so a long-lived key holds no pinned block alive.
+newtype Key a = Key ShortByteString
   deriving (Eq, Ord, Typeable)
 
 type PublicKey   = Key Sodium.PublicKey
@@ -97,37 +116,38 @@ type CombinedKey = Key Sodium.CombinedKey
 type Nonce       = Key Sodium.Nonce
 type Signature   = Key Sodium.Signature
 
-instance Sodium.IsEncoding a => Sodium.IsEncoding (Key a) where
-  encode = Sodium.encode . unKey
-  decode = fmap Key . Sodium.decode
+-- | Decoding copies, so the key keeps no packet alive.
+instance CryptoNumber a => Sodium.IsEncoding (Key a) where
+  encode (Key bytes) = Short.fromShort bytes
+  decode bytes
+    | ByteString.length bytes == encodedByteSize (Proxy :: Proxy a) = Just . Key $ Short.toShort bytes
+    | otherwise = Nothing
+
+-- | For NaCl. Never fails: a key always has its type's length.
+toSodium :: CryptoNumber a => Key a -> a
+toSodium = fromJust . Sodium.decode . Sodium.encode
+
+fromSodium :: CryptoNumber a => a -> Key a
+fromSodium = Key . Short.toShort . Sodium.encode
 
 
-keyToInteger :: Sodium.IsEncoding a => Key a -> Integer
-keyToInteger =
-  Binary.runGet Binary.get . encode
-  where
-    prefix = LazyByteString.pack
-      [ 0x01 -- Tag: big integer
-      , 0x01 -- Sign: positive
-      , 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x20 -- Length: 32 bytes
-      ]
-    encode =
-      LazyByteString.append prefix
-        . LazyByteString.reverse
-        . LazyByteString.fromStrict
-        . Sodium.encode
+-- | Straight from the bytes, as the DHT does this for every distance.
+keyToInteger :: Key a -> Integer
+keyToInteger (Key (ShortByteString (ByteArray bytes))) =
+  -- Most significant byte first.
+  integerFromByteArray (int2Word# (sizeofByteArray# bytes)) bytes 0## 1#
 
 
 decode :: (CryptoNumber a, MonadValidate DecodeError m) => ByteString.ByteString -> m (Key a)
 decode bytes =
   case Sodium.decode bytes of
-    Just key -> return $ Key key
+    Just key -> return key
     Nothing  -> refute $ fromString $ "unable to decode ByteString to Key: " <> show (ByteString.length bytes)
 
 
 instance CryptoNumber a => Binary (Key a) where
-  put (Key key) =
-    Binary.putByteString $ Sodium.encode key
+  put (Key bytes) =
+    Binary.putShortByteString bytes
 
   get = do
     bytes <- Binary.getByteString $ encodedByteSize (Proxy :: Proxy a)
@@ -135,7 +155,7 @@ instance CryptoNumber a => Binary (Key a) where
 
 
 instance CryptoNumber a => Show (Key a) where
-  show = show . Base16.encode . Sodium.encode . unKey
+  show = show . Base16.encode . Sodium.encode
 
 instance CryptoNumber a => Read (Key a) where
   readPrec = do
@@ -157,9 +177,5 @@ instance CryptoNumber a => MessagePack (Key a) where
 
 
 instance CryptoNumber a => Arbitrary (Key a) where
-  arbitrary = do
-    bytes <- fmap ByteString.pack $ Arbitrary.vector $ encodedByteSize (Proxy :: Proxy a)
-    case Sodium.decode bytes of
-      Just key -> return $ Key key
-      Nothing  -> error "unable to decode ByteString to Key"
+  arbitrary = Key . Short.pack <$> Arbitrary.vector (encodedByteSize (Proxy :: Proxy a))
 \end{code}

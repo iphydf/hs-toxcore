@@ -3,10 +3,8 @@ module Tox.Onion.RPCSpec (spec) where
 
 import           Test.Hspec
 import           Test.Hspec.QuickCheck
-import           Test.QuickCheck
 
 import           Data.Binary           (decode, encode)
-import qualified Data.ByteString.Lazy  as LBS
 
 import           Tox.Onion.RPC
 
@@ -22,7 +20,7 @@ spec = do
 
   describe "AnnounceResponsePayload" $
     prop "roundtrips Binary" $ \(x :: AnnounceResponsePayload) ->
-      -- We only take up to 4 nodes in serialization
+      -- The encoding holds at most 4 nodes.
       let x' = x { announceResponseNodes = take 4 (announceResponseNodes x) }
       in decode (encode x') == x'
 

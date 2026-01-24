@@ -1,6 +1,32 @@
 \begin{code}
 {-# LANGUAGE StrictData #-}
-module Tox.Network.Discovery.LAN where
+module Tox.Network.Discovery.LAN
+    ( portFrom
+    , portTo
+    , interval
+    , announce
+    , handlePacket
+    ) where
+
+import           Control.Monad                      (forM_)
+import qualified Crypto.Saltine.Class               as Sodium
+import           Data.ByteString                    (ByteString)
+import           Data.Word                          (Word16)
+
+import qualified Tox.Core.Time                      as Time
+import qualified Tox.Crypto.Core.KeyPair            as KeyPair
+import qualified Tox.DHT.DhtState                   as DhtState
+import qualified Tox.DHT.Operation                  as DHT
+import qualified Tox.Network.Core.HostAddress       as HostAddress
+import           Tox.Network.Core.HostAddress       (HostAddress (..))
+import           Tox.Network.Core.Networked         (Networked (..))
+import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
+import           Tox.Network.Core.Packet            (Packet (..),
+                                                     RawPayload (..))
+import qualified Tox.Network.Core.PacketKind        as PacketKind
+import           Tox.Network.Core.SocketAddress     (SocketAddress (..))
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
+import qualified Tox.Onion.Operation                as Onion
 \end{code}
 
 \chapter{LAN discovery}
@@ -16,6 +42,29 @@ LAN discovery works by sending a UDP packet through the toxcore UDP socket to
 the interface broadcast address on IPv4, the global broadcast address
 (255.255.255.255) and the multicast address on IPv6 (FF02::1) on the default
 Tox UDP port (33445).
+
+\begin{code}
+-- | Ports toxcore uses. LAN discovery always goes to the first, and a few
+-- more each time.
+portFrom, portTo, portsPerDiscovery :: Word16
+portFrom = 33445
+portTo = 33545
+portsPerDiscovery = 10
+
+-- | Announces us on the first port and the few from the given one, over IPv6
+-- too if we can. Gives where the next announcement starts.
+announce :: DHT.DhtNodeMonad m => Bool -> Word16 -> m Word16
+announce ipv6 start = do
+  dhtPk <- DHT.getsDht (KeyPair.publicKey . DhtState.dhtKeyPair)
+  let lastPort = min portTo (start + portsPerDiscovery)
+      broadcast = IPv4 $ HostAddress.tupleToHostAddress (255, 255, 255, 255)
+      allNodes = IPv6 (0xff020000, 0, 0, 1)
+      packet = Packet PacketKind.LanDiscovery (RawPayload $ Sodium.encode dhtPk)
+  forM_ (portFrom : [start .. lastPort - 1]) $ \port ->
+    forM_ (broadcast : [allNodes | ipv6]) $ \host ->
+      sendPacket (NodeInfo UDP (SocketAddress host (fromIntegral port)) dhtPk) packet
+  return $ if lastPort == portTo then portFrom + 1 else lastPort
+\end{code}
 
 The LAN Discovery packet:
 
@@ -33,9 +82,29 @@ peer from which it receives one of these packets.  Through this mechanism, Tox
 clients will bootstrap themselves automatically from other Tox clients running
 on the local network.
 
+\begin{code}
+handlePacket :: (DHT.DhtNodeMonad m, Onion.OnionNodeMonad m) => SocketAddress -> ByteString -> m ()
+handlePacket sa@(SocketAddress host _) payload = do
+  ourPk <- DHT.getsDht (KeyPair.publicKey . DhtState.dhtKeyPair)
+  case Sodium.decode payload of
+    -- The DHT doesn't keep these to bootstrap from again, as LAN peers keep
+    -- announcing themselves, and one announcing many keys would push out
+    -- the nodes we were given.
+    Just pk | HostAddress.isLan host, pk /= ourPk -> do
+      let node = NodeInfo UDP sa pk
+      DHT.askCloseNodes node
+      Onion.addBootstrapNodes [node]
+    _ -> return ()
+\end{code}
+
 When enabled, toxcore sends these packets every 10 seconds to keep delays low.
 The packets could be sent up to every 60 seconds but this would make peer
 finding over the network 6 times slower.
+
+\begin{code}
+interval :: Time.TimeDiff
+interval = Time.seconds 10
+\end{code}
 
 LAN discovery enables two friends on a local network to find each other as the
 DHT prioritizes LAN addresses over non LAN addresses for DHT peers.  Sending a

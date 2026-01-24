@@ -1,8 +1,3 @@
-\begin{code}
-{-# LANGUAGE StrictData #-}
-module Tox.Session.Friend where
-\end{code}
-
 \chapter{Messenger}
 
 Messenger is the module at the top of all the other modules.  It sits on top of
@@ -15,6 +10,241 @@ lets users set a nickname and status message which it then transmits to friends
 when they are online.  It also allows users to send messages to friends and
 builds an instant messenging system on top of the lower level
 \texttt{friend\_connection} module.
+
+\begin{code}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE MultiWayIf        #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StrictData        #-}
+module Tox.Session.Friend where
+
+import           Control.Monad             (filterM, forM_, guard, void, when,
+                                            zipWithM, (<$!>), (<=<))
+import qualified Crypto.Saltine.Class      as Sodium
+import qualified Data.Binary.Get           as Get
+import           Data.Bits                 (xor)
+import           Data.ByteString           (ByteString)
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.Lazy      as LBS
+import           Data.List                 (mapAccumL)
+import           Data.Map                  (Map)
+import qualified Data.Map                  as Map
+import           Data.Maybe                (isNothing)
+import           Data.Word                 (Word32, Word64, Word8)
+
+import qualified Data.Binary.Put           as Put
+import qualified Tox.Core.Schedule         as Schedule
+import           Tox.Core.Schedule         (Schedule)
+import qualified Tox.Core.Time             as Time
+import           Tox.Core.Time             (TimeDiff, Timestamp)
+import qualified Tox.Core.Timed            as Timed
+import           Tox.Crypto.Core.Key       (PublicKey)
+import qualified Tox.Crypto.Core.KeyPair   as KeyPair
+import qualified Tox.Session.Connection    as Connection
+import           Tox.Session.Connection    (ConnectionEvent (..))
+import qualified Tox.Transport.Reliability as Reliability
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Implementation.
+ -
+ ------------------------------------------------------------------------------}
+
+packetIdOnline, packetIdOffline, packetIdNickname, packetIdStatusMessage,
+  packetIdUserStatus, packetIdTyping, packetIdMessage, packetIdAction,
+  packetIdFileSendRequest, packetIdFileControl, packetIdFileData :: Word8
+packetIdOnline        = 0x18
+packetIdOffline       = 0x19
+packetIdNickname      = 0x30
+packetIdStatusMessage = 0x31
+packetIdUserStatus    = 0x32
+packetIdTyping        = 0x33
+packetIdMessage       = 0x40
+packetIdAction        = 0x41
+packetIdFileSendRequest = 0x50
+packetIdFileControl     = 0x51
+packetIdFileData        = 0x52
+
+packetIds :: [Word8]
+packetIds =
+  [ packetIdOnline, packetIdOffline, packetIdNickname, packetIdStatusMessage
+  , packetIdUserStatus, packetIdTyping, packetIdMessage, packetIdAction
+  , packetIdFileSendRequest, packetIdFileControl, packetIdFileData
+  ]
+
+maxNameLength, maxStatusMessageLength, maxMessageLength, maxFriendRequestLength :: Int
+maxNameLength          = 128
+maxStatusMessageLength = 1007
+maxMessageLength       = 1372
+maxFriendRequestLength = 921
+
+maxFileNameLength, maxFileDataSize, fileIdLength, maxFileTransfers :: Int
+maxFileNameLength = 255
+maxFileDataSize   = 1371
+fileIdLength      = 32
+maxFileTransfers  = 256
+
+-- | Congestion window slots we keep for data other than files (as toxcore
+-- does).
+fileReservedSlots :: Int
+fileReservedSlots = 16
+
+fileKindData, fileKindAvatar :: Word32
+fileKindData   = 0
+fileKindAvatar = 1
+
+-- | First wait for the friend to connect after a request. Doubles each time
+-- we send it again.
+friendRequestTimeout :: TimeDiff
+friendRequestTimeout = Time.seconds 5
+
+-- | Request senders we remember, to ignore repeated requests.
+maxReceivedRequests :: Int
+maxReceivedRequests = 32
+
+data UserStatus = Online | Away | Busy
+  deriving (Eq, Show, Enum, Bounded)
+
+data MessageType = MessageNormal | MessageAction
+  deriving (Eq, Show)
+
+data FileRef = Outgoing Word8 | Incoming Word8
+  deriving (Eq, Ord, Show)
+
+data FileControl = FileResume | FilePause | FileCancel
+  deriving (Eq, Show, Enum, Bounded)
+
+data TransferStatus
+  = NotAccepted
+  | Transferring
+  | Finished Word32 -- ^ All data sent, in the packet with this number.
+  deriving (Eq, Show)
+
+data Transfer = Transfer
+  { tfKind        :: Word32
+  , tfSize        :: Word64
+  , tfStatus      :: TransferStatus
+  , tfPausedUs    :: Bool
+  , tfPausedOther :: Bool
+  , tfTransferred :: Word64
+  , tfRequested   :: Word64 -- ^ How far we asked our client for data.
+  } deriving (Eq, Show)
+
+data FileError
+  = FileFriendNotFound
+  | FileFriendNotConnected
+  | FileNotFound
+  | FileNameTooLong
+  | FileTooMany
+  | FileBadState      -- ^ The control or seek doesn't fit the transfer.
+  | FileBadChunk      -- ^ Wrong position or length.
+  | FileSendQueueFull
+  deriving (Eq, Show)
+
+data Friend = Friend
+  { friendRealPk        :: PublicKey
+  , friendName          :: ByteString
+  , friendStatus        :: UserStatus
+  , friendMsg           :: ByteString
+  , friendTyping        :: Bool
+  , friendOnline        :: Bool -- ^ Set by the friend's ONLINE packet.
+  , friendRequest       :: Maybe OutgoingRequest -- ^ Until the friend connects.
+  , friendLastMessageId :: Word32
+  , friendReceipts      :: [(Word32, Word32)] -- ^ Message ID and packet number, oldest first.
+  , friendSending       :: Map Word8 Transfer
+  , friendReceiving     :: Map Word8 Transfer
+  , friendLastSeen      :: Word64 -- ^ Unix time we last saw the friend online, 0 for never.
+  , friendInfoUnsent    :: [Word8] -- ^ Info packet IDs the friend still needs to get.
+  } deriving (Show)
+
+-- | We keep sending it until the friend connects.
+data OutgoingRequest = OutgoingRequest
+  { orNospam   :: ByteString -- ^ From the friend's Tox ID.
+  , orMessage  :: ByteString
+  , orLastSent :: Maybe Timestamp
+  , orTimeout  :: TimeDiff
+  } deriving (Show)
+
+data Messenger = Messenger
+  { messengerFriends :: Map PublicKey Friend
+  , selfName         :: ByteString
+  , selfStatus       :: UserStatus
+  , selfMsg          :: ByteString
+  , selfNospam       :: Word32
+  , receivedRequests :: [PublicKey]
+  , messengerJobs    :: Schedule MessengerJob
+  }
+
+-- | A friend's work, each part due on its own.
+data MessengerJob
+  = Working PublicKey -- ^ Receipts, our info and file chunks.
+  | Request PublicKey -- ^ Our friend request.
+  deriving (Eq, Ord, Show)
+
+data AddFriendError
+  = MessageEmpty
+  | MessageTooLong
+  | OwnKey
+  | AlreadyFriend
+  deriving (Eq, Show)
+
+data SendMessageError
+  = SendFriendNotFound
+  | SendFriendNotConnected
+  | SendEmpty
+  | SendTooLong
+  | SendQueueFull
+  deriving (Eq, Show)
+
+data CustomPacketError
+  = CustomFriendNotFound
+  | CustomFriendNotConnected
+  | CustomEmpty
+  | CustomInvalid -- ^ Not a client packet ID.
+  | CustomTooLong
+  | CustomSendQueueFull
+  deriving (Eq, Show)
+
+data MessengerEvent
+  = FriendConnectionStatus PublicKey Bool
+  | FriendMessage PublicKey MessageType ByteString
+  | FriendNameChanged PublicKey ByteString
+  | FriendStatusMessageChanged PublicKey ByteString
+  | FriendUserStatusChanged PublicKey UserStatus
+  | FriendTypingChanged PublicKey Bool
+  | FriendRequestReceived PublicKey ByteString -- ^ Sender and message.
+  | FriendReadReceipt PublicKey Word32          -- ^ Message ID.
+  | FileReceived PublicKey Word8 Word32 Word64 ByteString ByteString -- ^ Number, kind, size, ID and name.
+  | FileChunkReceived PublicKey Word8 Word64 ByteString   -- ^ Empty when the file is complete.
+  | FileChunkRequested PublicKey Word8 Word64 Int         -- ^ Length 0 when the friend has it all.
+  | FileControlReceived PublicKey FileRef FileControl
+  deriving (Eq, Show)
+
+class (Monad m, Connection.ConnectionMonad m) => MessengerMonad m where
+  getMessenger :: m Messenger
+  putMessenger :: Messenger -> m ()
+
+getsMessenger :: MessengerMonad m => (Messenger -> a) -> m a
+getsMessenger f = f <$!> getMessenger
+
+modifyMessenger :: MessengerMonad m => (Messenger -> Messenger) -> m ()
+modifyMessenger f = getMessenger >>= putMessenger . f
+
+modifyFriend :: MessengerMonad m => PublicKey -> (Friend -> Friend) -> m ()
+modifyFriend pk f = modifyMessenger $ \s -> s { messengerFriends = Map.adjust f pk (messengerFriends s) }
+
+initMessenger :: Word32 -> Messenger
+initMessenger nospam = Messenger
+  { messengerFriends = Map.empty
+  , selfName         = ""
+  , selfStatus       = Online
+  , selfMsg          = ""
+  , selfNospam       = nospam
+  , receivedRequests = []
+  , messengerJobs    = Schedule.empty
+  }
+\end{code}
 
 Messenger offers two methods to add a friend.  The first way is to add a friend
 with only their long term public key, this is used when a friend needs to be
@@ -64,6 +294,172 @@ request, with the set message, to the peer whose Tox ID was added.  The method
 is similar to the first one, except that a friend request is crafted and sent
 to the other peer.
 
+\begin{code}
+-- | Without sending a friend request.
+addFriend :: MessengerMonad m => PublicKey -> m ()
+addFriend pk = addFriendEntry pk Nothing
+
+addFriendEntry :: MessengerMonad m => PublicKey -> Maybe OutgoingRequest -> m ()
+addFriendEntry pk request = do
+  let friend = Friend
+        { friendRealPk        = pk
+        , friendName          = ""
+        , friendStatus        = Online
+        , friendMsg           = ""
+        , friendTyping        = False
+        , friendOnline        = False
+        , friendRequest       = request
+        , friendLastMessageId = 0
+        , friendReceipts      = []
+        , friendSending       = Map.empty
+        , friendReceiving     = Map.empty
+        , friendLastSeen      = 0
+        , friendInfoUnsent    = []
+        }
+  modifyMessenger $ \s -> s { messengerFriends = Map.insert pk friend (messengerFriends s) }
+  now <- Timed.askTime
+  forM_ request $ \_ -> schedule (Schedule.at now (Request pk))
+  Connection.addFriend pk
+  -- A conference may have connected us already.
+  connected <- Connection.getsConn (maybe False Connection.fcOnline . Map.lookup pk . Connection.friends)
+  when connected . void $ sendPacketId pk packetIdOnline BS.empty
+
+-- | The connection stays for whoever else uses it, so the caller lets it go
+-- when nobody does.
+deleteFriend :: MessengerMonad m => PublicKey -> m Bool
+deleteFriend pk = do
+  known <- getsMessenger $ Map.member pk . messengerFriends
+  when known $ do
+    _ <- sendPacketId pk packetIdOffline BS.empty
+    modifyMessenger $ \s -> s
+      { messengerFriends = Map.delete pk (messengerFriends s)
+      , messengerJobs = Schedule.cancel (Working pk) . Schedule.cancel (Request pk) $ messengerJobs s
+      }
+  return known
+
+addFriendWithRequest :: MessengerMonad m
+                     => PublicKey -> ByteString -> ByteString -> m (Either AddFriendError ())
+addFriendWithRequest pk nospam message = do
+  ourPk <- KeyPair.publicKey <$> Connection.getsConn Connection.ourRealKeys
+  known <- getsMessenger $ Map.member pk . messengerFriends
+  if | BS.null message                          -> return $ Left MessageEmpty
+     | BS.length message > maxFriendRequestLength -> return $ Left MessageTooLong
+     | pk == ourPk                              -> return $ Left OwnKey
+     | known                                    -> return $ Left AlreadyFriend
+     | otherwise -> Right <$> addFriendEntry pk (Just $ OutgoingRequest nospam message Nothing friendRequestTimeout)
+
+-- | Little-endian, as toxcore writes our Tox ID on the platforms it runs on.
+nospamBytes :: Messenger -> ByteString
+nospamBytes = LBS.toStrict . Put.runPut . Put.putWord32le . selfNospam
+
+toxIdLength, nospamLength, toxIdChecksumLength :: Int
+toxIdLength = 32 + nospamLength + toxIdChecksumLength
+nospamLength = 4
+toxIdChecksumLength = 2
+
+toxId :: PublicKey -> Messenger -> ByteString
+toxId pk m = body <> toxIdChecksum body
+  where
+    body = Sodium.encode pk <> nospamBytes m
+
+parseToxId :: ByteString -> Maybe (PublicKey, ByteString)
+parseToxId bytes = do
+  guard $ BS.length bytes == toxIdLength
+  let (body, checksum) = BS.splitAt (toxIdLength - toxIdChecksumLength) bytes
+      (pkBytes, nospam) = BS.splitAt (BS.length body - nospamLength) body
+  guard $ toxIdChecksum body == checksum
+  pk <- Sodium.decode pkBytes
+  return (pk, nospam)
+
+toxIdChecksum :: ByteString -> ByteString
+toxIdChecksum body = BS.pack [foldr xor 0 (evens body), foldr xor 0 (evens $ BS.drop 1 body)]
+  where
+    evens bs = [ BS.index bs i | i <- [0, 2 .. BS.length bs - 1] ]
+
+schedule :: MessengerMonad m => (Schedule MessengerJob -> Schedule MessengerJob) -> m ()
+schedule f = modifyMessenger $ \s -> s { messengerJobs = f (messengerJobs s) }
+
+nextDue :: Messenger -> Maybe Timestamp
+nextDue = Schedule.next . messengerJobs
+
+runDue :: MessengerMonad m => m [MessengerEvent]
+runDue = do
+  now <- Timed.askTime
+  (due, waiting) <- getsMessenger $ Schedule.takeDue now . messengerJobs
+  modifyMessenger $ \s -> s { messengerJobs = waiting }
+  concat <$> mapM (\case Working pk -> work pk; Request pk -> [] <$ sendFriendRequest pk) due
+
+work :: MessengerMonad m => PublicKey -> m [MessengerEvent]
+work pk = do
+  receipts <- checkReceipts pk
+  sendInfoUnsent pk
+  chunks <- requestChunks pk
+  -- Its own changes stir it again, and need no second run.
+  schedule (Schedule.cancel (Working pk))
+  return $ receipts ++ chunks
+
+-- | When the friend may have work now.
+stir :: MessengerMonad m => PublicKey -> m ()
+stir pk = do
+  working <- getsMessenger $ maybe False hasWork . Map.lookup pk . messengerFriends
+  now <- Timed.askTime
+  when working $ schedule (Schedule.soonest now (Working pk))
+
+hasWork :: Friend -> Bool
+hasWork f = friendOnline f && (not (null (friendReceipts f)) || not (null (friendInfoUnsent f)) || any moving (friendSending f))
+  where
+    moving t = case tfStatus t of
+      Finished _   -> True
+      Transferring -> not (tfPausedUs t || tfPausedOther t)
+      NotAccepted  -> False
+
+checkReceipts :: MessengerMonad m => PublicKey -> m [MessengerEvent]
+checkReceipts pk = do
+  receipts <- getsMessenger $ maybe [] friendReceipts . Map.lookup pk . messengerFriends
+  delivered <- takeWhileM (Connection.isDelivered pk . snd) receipts
+  if null delivered then return [] else do
+    modifyFriend pk $ \f -> f { friendReceipts = drop (length delivered) (friendReceipts f) }
+    return [ FriendReadReceipt pk msgId | (msgId, _) <- delivered ]
+  where
+    takeWhileM _ [] = return []
+    takeWhileM p (x : xs) = p x >>= \ok -> if ok then (x :) <$> takeWhileM p xs else return []
+
+-- | Again after its timeout, which doubles each time. One that can't go yet
+-- waits for 'friendReachable'.
+sendFriendRequest :: MessengerMonad m => PublicKey -> m ()
+sendFriendRequest pk = do
+  now <- Timed.askTime
+  pending <- getsMessenger $ friendRequest <=< Map.lookup pk . messengerFriends
+  forM_ pending $ \r0 -> do
+    let r = case orLastSent r0 of
+          Just t | Time.addTime t (orTimeout r0) <= now -> r0 { orLastSent = Nothing, orTimeout = orTimeout r0 * 2 }
+          _ -> r0
+    r' <- case orLastSent r of
+      Just _  -> return r
+      Nothing -> do
+        sent <- Connection.sendFriendRequestPacket pk (orNospam r <> orMessage r)
+        return $ if sent then r { orLastSent = Just now } else r
+    modifyFriend pk $ \f -> f { friendRequest = Just r' }
+    forM_ (orLastSent r') $ \t -> schedule (Schedule.at (Time.addTime t (orTimeout r')) (Request pk))
+
+-- | Nodes store the friend now, so a request can go through them.
+friendReachable :: MessengerMonad m => PublicKey -> m ()
+friendReachable pk = do
+  waiting <- getsMessenger $ maybe False (any (isNothing . orLastSent) . friendRequest) . Map.lookup pk . messengerFriends
+  now <- Timed.askTime
+  when waiting $ schedule (Schedule.at now (Request pk))
+
+handleFriendRequest :: MessengerMonad m => PublicKey -> ByteString -> m [MessengerEvent]
+handleFriendRequest pk bytes = do
+  m <- getMessenger
+  let (nospam, message) = BS.splitAt 4 bytes
+  if nospam /= nospamBytes m || BS.null message || Map.member pk (messengerFriends m) || pk `elem` receivedRequests m
+  then return []
+  else do
+    putMessenger m { receivedRequests = take maxReceivedRequests (pk : receivedRequests m) }
+    return [FriendRequestReceived pk message]
+\end{code}
+
 When a friend connection associated to a Messenger friend goes online, a ONLINE
 packet will be sent to them.  Friends are only set as online if an ONLINE
 packet is received.
@@ -94,6 +490,175 @@ sent.  Every Messenger loop, the entries are read from the bottom and entries
 are removed and passed to the client until an entry that refers to a packet not
 yet received by the other is reached, when this happens it stops.
 
+\begin{code}
+isFriendOnline :: MessengerMonad m => PublicKey -> m Bool
+isFriendOnline pk = getsMessenger $ maybe False friendOnline . Map.lookup pk . messengerFriends
+
+-- | Lossless or lossy, with a client packet ID (included in the data).
+sendCustomPacket :: MessengerMonad m
+                 => (Word8 -> Bool) -> Bool -> PublicKey -> ByteString
+                 -> m (Either CustomPacketError ())
+sendCustomPacket clientId lossless pk bytes = do
+  mFriend <- getsMessenger $ Map.lookup pk . messengerFriends
+  case (mFriend, BS.uncons bytes) of
+    (Nothing, _) -> return $ Left CustomFriendNotFound
+    (Just f, _) | not (friendOnline f) -> return $ Left CustomFriendNotConnected
+    (_, Nothing) -> return $ Left CustomEmpty
+    (_, Just (ident, _))
+      | not (clientId ident) -> return $ Left CustomInvalid
+      | BS.length bytes > Reliability.maxCryptoDataSize -> return $ Left CustomTooLong
+      | otherwise -> do
+          sent <- if lossless then Connection.sendFriendData pk bytes else Connection.sendFriendLossy pk bytes
+          return $ if sent then Right () else Left CustomSendQueueFull
+
+-- | Gives the ID a 'FriendReadReceipt' reports once the friend has it.
+sendMessage :: MessengerMonad m
+            => PublicKey -> MessageType -> ByteString -> m (Either SendMessageError Word32)
+sendMessage pk ty msg = do
+  mFriend <- getsMessenger $ Map.lookup pk . messengerFriends
+  case mFriend of
+    Nothing -> return $ Left SendFriendNotFound
+    Just f
+      | not (friendOnline f)            -> return $ Left SendFriendNotConnected
+      | BS.null msg                     -> return $ Left SendEmpty
+      | BS.length msg > maxMessageLength -> return $ Left SendTooLong
+      | otherwise -> Connection.sendFriendDataNumbered pk (BS.cons (messagePacketId ty) msg) >>= \case
+          Nothing -> return $ Left SendQueueFull
+          Just num -> do
+            let msgId = friendLastMessageId f + 1
+            modifyFriend pk $ \f' ->
+              f' { friendLastMessageId = msgId, friendReceipts = friendReceipts f' ++ [(msgId, num)] }
+            stir pk
+            return $ Right msgId
+  where
+    messagePacketId MessageNormal = packetIdMessage
+    messagePacketId MessageAction = packetIdAction
+
+setTyping :: MessengerMonad m => PublicKey -> Bool -> m Bool
+setTyping pk typing = do
+  online <- isFriendOnline pk
+  if online then sendPacketId pk packetIdTyping (BS.singleton $ if typing then 1 else 0) else return False
+
+setSelfName :: MessengerMonad m => ByteString -> m Bool
+setSelfName name
+  | BS.length name > maxNameLength = return False
+  | otherwise = do
+      modifyMessenger $ \s -> s { selfName = name }
+      True <$ selfInfoChanged packetIdNickname
+
+setSelfStatusMessage :: MessengerMonad m => ByteString -> m Bool
+setSelfStatusMessage msg
+  | BS.length msg > maxStatusMessageLength = return False
+  | otherwise = do
+      modifyMessenger $ \s -> s { selfMsg = msg }
+      True <$ selfInfoChanged packetIdStatusMessage
+
+setSelfStatus :: MessengerMonad m => UserStatus -> m ()
+setSelfStatus status = do
+  modifyMessenger $ \s -> s { selfStatus = status }
+  selfInfoChanged packetIdUserStatus
+
+-- | All friends need the info packet again. Send it to online ones now.
+selfInfoChanged :: MessengerMonad m => Word8 -> m ()
+selfInfoChanged ident = do
+  pks <- getsMessenger $ Map.keys . messengerFriends
+  forM_ pks $ \pk -> modifyFriend pk $ \f -> f { friendInfoUnsent = owe ident (friendInfoUnsent f) }
+  mapM_ (\pk -> sendInfoUnsent pk >> stir pk) pks
+  where owe i is = filter (/= i) is ++ [i]
+
+sendPacketId :: MessengerMonad m => PublicKey -> Word8 -> ByteString -> m Bool
+sendPacketId pk ident = Connection.sendFriendData pk . BS.cons ident
+
+-- | Name, status message and user status. Friends get them when they come
+-- online and whenever they change.
+selfInfo :: [Word8]
+selfInfo = [packetIdNickname, packetIdStatusMessage, packetIdUserStatus]
+
+-- | Keep the ones the queue has no room for, to try again (as toxcore does).
+sendInfoUnsent :: MessengerMonad m => PublicKey -> m ()
+sendInfoUnsent pk = do
+  m <- getMessenger
+  forM_ (Map.lookup pk $ messengerFriends m) $ \f -> when (friendOnline f && not (null $ friendInfoUnsent f)) $ do
+    left <- filterM (\ident -> not <$> sendPacketId pk ident (payload m ident)) (friendInfoUnsent f)
+    modifyFriend pk $ \f' -> f' { friendInfoUnsent = left }
+  where
+    payload m ident
+      | ident == packetIdNickname = selfName m
+      | ident == packetIdStatusMessage = selfMsg m
+      | otherwise = BS.singleton . fromIntegral . fromEnum $ selfStatus m
+
+setOnline :: MessengerMonad m => PublicKey -> Bool -> m [MessengerEvent]
+setOnline pk online = do
+  wasOnline <- isFriendOnline pk
+  -- Like toxcore, transfers end when the friend goes offline.
+  modifyFriend pk $ \f -> f
+    { friendOnline = online
+    , friendReceipts = if online then friendReceipts f else []
+    , friendSending = if online then friendSending f else Map.empty
+    , friendReceiving = if online then friendReceiving f else Map.empty
+    }
+  if wasOnline == online then return [] else do
+    when online $ do
+      modifyFriend pk $ \f -> f { friendInfoUnsent = selfInfo }
+      sendInfoUnsent pk
+      stir pk
+    return [FriendConnectionStatus pk online]
+
+handleConnectionEvent :: MessengerMonad m => ConnectionEvent -> m [MessengerEvent]
+handleConnectionEvent = \case
+  FriendOnline pk      -> do
+    -- Conference peers who aren't friends have friend connections too.
+    known <- getsMessenger $ Map.member pk . messengerFriends
+    when known $ do
+      modifyFriend pk $ \f -> f { friendRequest = Nothing }
+      schedule (Schedule.cancel (Request pk))
+      void $ sendPacketId pk packetIdOnline BS.empty
+    return []
+  FriendOffline pk     -> setOnline pk False
+  FriendData pk bytes  -> handleFriendPacket pk bytes
+  FriendLossyData _ _  -> return []
+  FriendRequest pk bytes -> handleFriendRequest pk bytes
+  FriendMoved _        -> return []
+  FriendRoom pk        -> [] <$ stir pk
+
+handleFriendPacket :: MessengerMonad m => PublicKey -> ByteString -> m [MessengerEvent]
+handleFriendPacket pk bytes = do
+  known <- getsMessenger $ Map.member pk . messengerFriends
+  online <- isFriendOnline pk
+  case BS.uncons bytes of
+    Nothing -> return []
+    Just (ident, payload)
+      | not known -> return []
+      | not online -> if ident == packetIdOnline && BS.null payload
+          then do
+            _ <- sendPacketId pk packetIdOnline BS.empty
+            setOnline pk True
+          else return []
+      | ident == packetIdOffline -> setOnline pk False
+      | ident == packetIdNickname && BS.length payload <= maxNameLength -> do
+          modifyFriend pk $ \f -> f { friendName = payload }
+          return [FriendNameChanged pk payload]
+      | ident == packetIdStatusMessage && BS.length payload <= maxStatusMessageLength -> do
+          modifyFriend pk $ \f -> f { friendMsg = payload }
+          return [FriendStatusMessageChanged pk payload]
+      | ident == packetIdUserStatus, [status] <- BS.unpack payload
+      , fromIntegral status <= fromEnum (maxBound :: UserStatus) -> do
+          let userStatus = toEnum $ fromIntegral status
+          modifyFriend pk $ \f -> f { friendStatus = userStatus }
+          return [FriendUserStatusChanged pk userStatus]
+      | ident == packetIdTyping, [typing] <- BS.unpack payload -> do
+          modifyFriend pk $ \f -> f { friendTyping = typing /= 0 }
+          return [FriendTypingChanged pk (typing /= 0)]
+      | ident == packetIdMessage && not (BS.null payload) ->
+          return [FriendMessage pk MessageNormal payload]
+      | ident == packetIdAction && not (BS.null payload) ->
+          return [FriendMessage pk MessageAction payload]
+      | ident == packetIdFileSendRequest -> handleFileSendRequest pk payload
+      | ident == packetIdFileControl -> handleFileControl pk payload
+      | ident == packetIdFileData -> handleFileData pk payload
+      | otherwise -> return []
+\end{code}
+
 List of Messenger packets:
 
 \section{\texttt{ONLINE}}
@@ -109,8 +674,8 @@ length: 1 byte
 Sent to a friend when a connection is established to tell them to mark us as
 online in their friends list.  This packet and the OFFLINE packet are necessary
 as \texttt{friend\_connections} can be established with non-friends who are part
-of a groupchat.  The two packets are used to differentiate between these peers,
-connected to the user through groupchats, and actual friends who ought to be
+of a conference.  The two packets are used to differentiate between these peers,
+connected to the user through conferences, and actual friends who ought to be
 marked as online in the friendlist.
 
 On receiving this packet, Messenger will show the peer as being online.
@@ -126,7 +691,7 @@ length: 1 byte
 \end{tabular}
 
 Sent to a friend when deleting the friend.  Prevents a deleted friend from
-seeing us as online if we are connected to them because of a group chat.
+seeing us as online if we are connected to them because of a conference.
 
 On receiving this packet, Messenger will show this peer as offline.
 
@@ -424,16 +989,274 @@ transfers.  It also makes it simpler for clients as the method for resuming
 file transfers remains the same, even if the client is restarted or toxcore
 loses the connection to the friend because of a bad internet connection.
 
-\section{Group Chat Related Packets}
+\begin{code}
+{-------------------------------------------------------------------------------
+ -
+ - :: File transfers.
+ -
+ ------------------------------------------------------------------------------}
+
+encodeWord32 :: Word32 -> ByteString
+encodeWord32 = LBS.toStrict . Put.runPut . Put.putWord32be
+
+encodeWord64 :: Word64 -> ByteString
+encodeWord64 = LBS.toStrict . Put.runPut . Put.putWord64be
+
+decodeWord64 :: ByteString -> Word64
+decodeWord64 = Get.runGet Get.getWord64be . LBS.fromStrict
+
+chunksBetween :: Word64 -> Word64 -> Int
+chunksBetween from to = fromIntegral $ d `div` chunk + (if d `mod` chunk == 0 then 0 else 1)
+  where
+    d = to - from
+    chunk = fromIntegral maxFileDataSize
+
+-- | Not accepted yet, nothing sent or asked for.
+newTransfer :: Word32 -> Word64 -> Transfer
+newTransfer kind size = Transfer
+  { tfKind        = kind
+  , tfSize        = size
+  , tfStatus      = NotAccepted
+  , tfPausedUs    = False
+  , tfPausedOther = False
+  , tfTransferred = 0
+  , tfRequested   = 0
+  }
+
+getTransfer :: MessengerMonad m => PublicKey -> FileRef -> m (Maybe Transfer)
+getTransfer pk ref = getsMessenger $ \s -> Map.lookup pk (messengerFriends s) >>= \f -> case ref of
+  Outgoing n -> Map.lookup n (friendSending f)
+  Incoming n -> Map.lookup n (friendReceiving f)
+
+setTransfer :: MessengerMonad m => PublicKey -> FileRef -> Maybe Transfer -> m ()
+setTransfer pk ref t = do
+  modifyFriend pk $ \f -> case ref of
+    Outgoing n -> f { friendSending = Map.alter (const t) n (friendSending f) }
+    Incoming n -> f { friendReceiving = Map.alter (const t) n (friendReceiving f) }
+  stir pk
+
+fileControlId :: FileControl -> Word8
+fileControlId = fromIntegral . fromEnum
+
+fileControlSeek :: Word8
+fileControlSeek = 3
+
+sendFileControl :: MessengerMonad m => PublicKey -> FileRef -> Word8 -> ByteString -> m Bool
+sendFileControl pk ref control payload = sendPacketId pk packetIdFileControl $
+  BS.pack [if incoming then 1 else 0, n, control] <> payload
+  where
+    (incoming, n) = case ref of
+      Outgoing i -> (False, i)
+      Incoming i -> (True, i)
+
+-- | The ID names the file, so a transfer can be resumed. Data is asked for
+-- with 'FileChunkRequested' once the friend accepts.
+sendFile :: MessengerMonad m
+         => PublicKey -> Word32 -> Word64 -> ByteString -> ByteString -> m (Either FileError Word8)
+sendFile pk kind size fileId name = do
+  mFriend <- getsMessenger $ Map.lookup pk . messengerFriends
+  case mFriend of
+    Nothing -> return $ Left FileFriendNotFound
+    Just f
+      | BS.length name > maxFileNameLength -> return $ Left FileNameTooLong
+      | otherwise -> case filter (`Map.notMember` friendSending f) [0 .. fromIntegral (maxFileTransfers - 1)] of
+          [] -> return $ Left FileTooMany
+          n : _ -> do
+            sent <- sendPacketId pk packetIdFileSendRequest $
+              BS.singleton n <> encodeWord32 kind <> encodeWord64 size <> fileId <> name
+            if not sent then return $ Left FileFriendNotConnected else do
+              setTransfer pk (Outgoing n) $ Just (newTransfer kind size)
+              return $ Right n
+
+-- | Resume also accepts a transfer.
+controlFile :: MessengerMonad m => PublicKey -> FileRef -> FileControl -> m (Either FileError ())
+controlFile pk ref control = do
+  online <- isFriendOnline pk
+  mTransfer <- getTransfer pk ref
+  case mTransfer of
+    _ | not online -> return $ Left FileFriendNotConnected
+    Nothing -> return $ Left FileNotFound
+    Just t -> case control of
+      FilePause | tfPausedUs t || tfStatus t /= Transferring -> return $ Left FileBadState
+      FileResume | not (canResume t) -> return $ Left FileBadState
+      _ -> do
+        sent <- sendFileControl pk ref (fileControlId control) BS.empty
+        if not sent then return $ Left FileFriendNotConnected else Right <$> setTransfer pk ref (case control of
+          FileCancel -> Nothing
+          FilePause  -> Just t { tfPausedUs = True }
+          FileResume -> Just t { tfStatus = if tfStatus t == NotAccepted then Transferring else tfStatus t
+                               , tfPausedUs = False })
+  where
+    -- Only the receiver accepts a transfer, and we only resume what we paused.
+    canResume t = case (tfStatus t, ref) of
+      (Transferring, _)         -> tfPausedUs t
+      (NotAccepted, Incoming _) -> True
+      _                         -> False
+
+-- | Before accepting.
+seekFile :: MessengerMonad m => PublicKey -> Word8 -> Word64 -> m (Either FileError ())
+seekFile pk n position = do
+  mTransfer <- getTransfer pk (Incoming n)
+  case mTransfer of
+    Nothing -> return $ Left FileNotFound
+    Just t
+      | tfStatus t /= NotAccepted || position >= tfSize t -> return $ Left FileBadState
+      | otherwise -> do
+          sent <- sendFileControl pk (Incoming n) fileControlSeek (encodeWord64 position)
+          if sent
+          then Right <$> setTransfer pk (Incoming n) (Just t { tfTransferred = position })
+          else return $ Left FileFriendNotConnected
+
+sendFileChunk :: MessengerMonad m
+              => PublicKey -> Word8 -> Word64 -> ByteString -> m (Either FileError ())
+sendFileChunk pk n position bytes = do
+  online <- isFriendOnline pk
+  mTransfer <- getTransfer pk (Outgoing n)
+  queued <- Connection.sendQueueLength pk
+  let len = fromIntegral (BS.length bytes)
+  case mTransfer of
+    _ | not online -> return $ Left FileFriendNotConnected
+    Nothing -> return $ Left FileNotFound
+    Just t
+      | tfStatus t /= Transferring -> return $ Left FileBadState
+      | BS.length bytes > maxFileDataSize || tfSize t - tfTransferred t < len
+        || (tfSize t /= maxBound && BS.length bytes /= maxFileDataSize && tfTransferred t + len /= tfSize t)
+        || position /= tfTransferred t || (tfRequested t <= position && tfSize t /= 0) -> return $ Left FileBadChunk
+      | queued > fromIntegral Reliability.bufferSize - fileReservedSlots -> return $ Left FileSendQueueFull
+      | otherwise -> Connection.sendFriendDataCongested pk (BS.pack [packetIdFileData, n] <> bytes) >>= \case
+          Nothing -> return $ Left FileSendQueueFull
+          Just num -> do
+            let transferred = tfTransferred t + len
+                done = BS.length bytes /= maxFileDataSize || transferred == tfSize t
+            Right <$> setTransfer pk (Outgoing n) (Just t
+              { tfTransferred = transferred
+              , tfStatus = if done then Finished num else Transferring
+              })
+
+-- | Ask our client for data while the friend's queue has room. Report
+-- transfers as finished once the friend has all the data.
+requestChunks :: MessengerMonad m => PublicKey -> m [MessengerEvent]
+requestChunks pk = do
+  sending <- getsMessenger $ maybe Map.empty friendSending . Map.lookup pk . messengerFriends
+  free <- Connection.freeSendSlots pk
+  let asked = sum [ chunksBetween (tfTransferred t) (tfRequested t)
+                  | t <- Map.elems sending, tfStatus t == Transferring ]
+      open = [ (n, t) | (n, t) <- Map.toList sending, tfStatus t == Transferring, not (paused t)
+                      , tfSize t /= 0, tfRequested t < tfSize t ]
+      shares = roundRobin (free - fileReservedSlots - asked)
+        [ chunksBetween (tfRequested t) (tfSize t) | (_, t) <- open ]
+  finished <- concat <$> mapM finish (Map.toList sending)
+  requested <- concat <$> zipWithM request open shares
+  return $ finished ++ requested
+  where
+    paused t = tfPausedUs t || tfPausedOther t
+    finish (n, t) = case tfStatus t of
+      Finished num -> do
+        delivered <- Connection.isDelivered pk num
+        if not delivered then return [] else do
+          setTransfer pk (Outgoing n) Nothing
+          return [FileChunkRequested pk n (tfTransferred t) 0]
+      Transferring | tfSize t == 0 && not (paused t) -> [] <$ sendFileChunk pk n 0 BS.empty
+      _ -> return []
+    request _ 0 = return []
+    request (n, t) chunks = do
+      let positions = take chunks [tfRequested t, tfRequested t + fromIntegral maxFileDataSize ..]
+          requests = [ FileChunkRequested pk n p (fromIntegral $ min (fromIntegral maxFileDataSize) (tfSize t - p))
+                     | p <- positions ]
+          requested = tfRequested t + fromIntegral (chunks * maxFileDataSize)
+      setTransfer pk (Outgoing n) (Just t { tfRequested = min (tfSize t) requested })
+      return requests
+
+-- | Hand out the budget 1 at a time to each transfer in turn, as toxcore
+-- does.
+roundRobin :: Int -> [Int] -> [Int]
+roundRobin budget wants
+  | budget <= 0 || all (<= 0) wants = map (const 0) wants
+  | otherwise = zipWith (+) given (roundRobin (budget - sum given) (zipWith (-) wants given))
+  where
+    given = snd $ mapAccumL (\b w -> if b > 0 && w > 0 then (b - 1, 1) else (b, 0)) budget wants
+
+handleFileSendRequest :: MessengerMonad m => PublicKey -> ByteString -> m [MessengerEvent]
+handleFileSendRequest pk payload
+  | BS.length payload < 1 + 4 + 8 + fileIdLength || BS.length name > maxFileNameLength = return []
+  | otherwise = do
+      existing <- getTransfer pk (Incoming n)
+      case existing of
+        Just _ -> return []
+        Nothing -> do
+          setTransfer pk (Incoming n) $ Just (newTransfer kind size)
+          return [FileReceived pk n kind size fileId name]
+  where
+    n = BS.head payload
+    kind = Get.runGet Get.getWord32be . LBS.fromStrict $ BS.take 4 (BS.drop 1 payload)
+    size = decodeWord64 $ BS.take 8 (BS.drop 5 payload)
+    fileId = BS.take fileIdLength (BS.drop (1 + 4 + 8) payload)
+    name = BS.drop (1 + 4 + 8 + fileIdLength) payload
+
+handleFileControl :: MessengerMonad m => PublicKey -> ByteString -> m [MessengerEvent]
+handleFileControl pk payload = case BS.unpack (BS.take 3 payload) of
+  [direction, n, control] -> do
+    -- The friend's incoming files are our outgoing ones.
+    let ref = if direction == 1 then Outgoing n else Incoming n
+        rest = BS.drop 3 payload
+    mTransfer <- getTransfer pk ref
+    case mTransfer of
+      Nothing -> do
+        when (control /= fileControlId FileCancel) $
+          void $ sendFileControl pk ref (fileControlId FileCancel) BS.empty
+        return []
+      Just t
+        | control == fileControlId FileResume -> case (ref, tfStatus t) of
+            (Outgoing _, NotAccepted) -> resumed ref t { tfStatus = Transferring }
+            _ | tfPausedOther t -> resumed ref t { tfPausedOther = False }
+            _ -> return []
+        | control == fileControlId FilePause ->
+            if tfPausedOther t || tfStatus t /= Transferring then return [] else do
+              setTransfer pk ref (Just t { tfPausedOther = True })
+              return [FileControlReceived pk ref FilePause]
+        | control == fileControlId FileCancel -> do
+            setTransfer pk ref Nothing
+            return [FileControlReceived pk ref FileCancel]
+        | control == fileControlSeek, Outgoing _ <- ref, BS.length rest == 8, tfStatus t == NotAccepted
+        , decodeWord64 rest < tfSize t -> do
+            setTransfer pk ref (Just t { tfRequested = decodeWord64 rest, tfTransferred = decodeWord64 rest })
+            return []
+        | otherwise -> return []
+  _ -> return []
+  where
+    resumed ref t = do
+      setTransfer pk ref (Just t)
+      return [FileControlReceived pk ref FileResume]
+
+handleFileData :: MessengerMonad m => PublicKey -> ByteString -> m [MessengerEvent]
+handleFileData pk payload = case BS.uncons payload of
+  Nothing -> return []
+  Just (n, bytes) -> do
+    mTransfer <- getTransfer pk (Incoming n)
+    case mTransfer of
+      Just t | tfStatus t == Transferring -> do
+        let remaining = tfSize t - tfTransferred t
+            chunk = if remaining < fromIntegral (BS.length bytes) then BS.take (fromIntegral remaining) bytes else bytes
+            transferred = tfTransferred t + fromIntegral (BS.length chunk)
+            complete = not (BS.null chunk) && (transferred >= tfSize t || BS.length chunk /= maxFileDataSize)
+        setTransfer pk (Incoming n) $
+          if complete || BS.null chunk then Nothing else Just t { tfTransferred = transferred }
+        return $ FileChunkReceived pk n (tfTransferred t) chunk
+          : [ FileChunkReceived pk n transferred BS.empty | complete ]
+      _ -> return []
+\end{code}
+
+\section{Conference Related Packets}
 
 \begin{tabular}{l|l}
   Packet ID & Packet Name \\
   \hline
-  0x60      & \texttt{INVITE\_GROUPCHAT} \\
+  0x60      & \texttt{INVITE\_CONFERENCE} \\
   0x61      & \texttt{ONLINE\_PACKET} \\
-  0x62      & \texttt{DIRECT\_GROUPCHAT} \\
-  0x63      & \texttt{MESSAGE\_GROUPCHAT} \\
-  0xC7      & \texttt{LOSSY\_GROUPCHAT} \\
+  0x62      & \texttt{DIRECT\_CONFERENCE} \\
+  0x63      & \texttt{MESSAGE\_CONFERENCE} \\
+  0x64      & \texttt{REJOIN\_CONFERENCE} \\
+  0xC7      & \texttt{LOSSY\_CONFERENCE} \\
 \end{tabular}
 
 Messenger also takes care of saving the friends list and other friend
@@ -504,7 +1327,7 @@ Friend request packet when sent as an onion data packet:
 \end{verbatim}
 
 Friend request packet when sent as a \texttt{net\_crypto} data packet (If we are
-directly connected to the peer because of a group chat but are not friends with
+directly connected to the peer because of a conference but are not friends with
 them):
 
 \begin{verbatim}
@@ -517,7 +1340,7 @@ requests.
 
 When sending a friend request, toxcore will check if the peer which a friend
 request is being sent to is already connected to using a \texttt{net\_crypto}
-connection which can happen if both are in the same group chat.  If this is the
+connection which can happen if both are in the same conference.  If this is the
 case the friend request will be sent as a \texttt{net\_crypto} packet using that
 connection.  If not, it will be sent as an onion data packet.
 

@@ -8,6 +8,7 @@ import           Test.Hspec
 import           Test.QuickCheck
 
 import           Control.Monad                 (unless, when)
+import           Data.Functor.Identity         (runIdentity)
 import           Data.List                     (sortOn)
 import qualified Data.Map                      as Map
 import           Data.Proxy                    (Proxy (..))
@@ -126,6 +127,11 @@ spec = do
         outputs = Nothing : map Just [0 .. 255]
       in
       map (KBuckets.bucketIndex zeroKey) inputs `shouldBe` outputs
+
+  describe "traverseClientLists" $
+    it "keeps every node in its own bucket" $
+      property $ \kBuckets ->
+        runIdentity (KBuckets.traverseClientLists pure kBuckets) `shouldBe` kBuckets
 
   describe "foldNodes" $
     it "iterates over nodes in order of distance from the base key" $

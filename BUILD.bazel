@@ -21,7 +21,16 @@ haskell_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-network",
         "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:monad-validate",
+        "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -38,16 +47,20 @@ haskell_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-network",
+        ":tox-onion",
         "//third_party/haskell:base",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:saltine",
     ],
 )
 
 haskell_library(
     name = "tox-transport",
-    srcs = glob([
-        "src/Tox/Transport/**/*.hs",
-        "src/Tox/Transport/**/*.lhs",
-    ]),
+    srcs = glob(["src/Tox/Transport/*.lhs"]),
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
     tags = [
@@ -67,6 +80,7 @@ haskell_library(
         "//third_party/haskell:containers",
         "//third_party/haskell:mtl",
         "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -92,7 +106,11 @@ haskell_library(
         "//third_party/haskell:base",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
+        "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -109,7 +127,20 @@ haskell_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-network",
+        ":tox-onion",
+        ":tox-tcp",
+        ":tox-transport",
         "//third_party/haskell:base",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:mtl",
+        "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -132,6 +163,7 @@ haskell_library(
     visibility = ["//visibility:public"],
     deps = [
         ":tox-application",
+        ":tox-chat",
         ":tox-core",
         ":tox-crypto",
         ":tox-dht",
@@ -157,6 +189,8 @@ haskell_library(
     tags = [
         "haskell",
         "no-cross",
+        # Every layer may use it.
+        "vocabulary",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -166,7 +200,10 @@ haskell_library(
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
         "//third_party/haskell:clock",
+        "//third_party/haskell:containers",
         "//third_party/haskell:mtl",
+        "//third_party/haskell:text",
+        "//third_party/haskell:transformers",
     ],
 )
 
@@ -181,6 +218,8 @@ haskell_library(
     tags = [
         "haskell",
         "no-cross",
+        # Every layer may use it.
+        "vocabulary",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -194,7 +233,6 @@ haskell_library(
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
         "//third_party/haskell:containers",
-        "//third_party/haskell:entropy",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
         "//third_party/haskell:random",
@@ -214,6 +252,8 @@ haskell_library(
     tags = [
         "haskell",
         "no-cross",
+        # Every layer may use it.
+        "vocabulary",
     ],
     visibility = ["//visibility:public"],
     deps = [
@@ -223,13 +263,13 @@ haskell_library(
         "//hs-msgpack-types",
         "//third_party/haskell:MonadRandom",
         "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:array",
         "//third_party/haskell:base",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
-        "//third_party/haskell:iproute",
         "//third_party/haskell:mtl",
-        "//third_party/haskell:network",
         "//third_party/haskell:random",
+        "//third_party/haskell:text",
         "//third_party/haskell:transformers",
     ],
 )
@@ -264,6 +304,7 @@ haskell_library(
         "//third_party/haskell:mtl",
         "//third_party/haskell:random",
         "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
         "//third_party/haskell:transformers",
     ],
 )
@@ -293,40 +334,15 @@ haskell_library(
         "//third_party/haskell:base",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
+        "//third_party/haskell:containers",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:saltine",
     ],
 )
 
 haskell_library(
-    name = "tox-application",
-    srcs = glob([
-        "src/Tox/Application/*.lhs",
-    ]),
-    ghcopts = ["-j4"],
-    src_strip_prefix = "src",
-    tags = [
-        "haskell",
-        "no-cross",
-    ],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":tox-core",
-        ":tox-crypto",
-        ":tox-network",
-        "//third_party/haskell:QuickCheck",
-        "//third_party/haskell:base",
-        "//third_party/haskell:binary",
-        "//third_party/haskell:bytestring",
-        "//third_party/haskell:monad-validate",
-    ],
-)
-
-haskell_library(
-    name = "tox-conduit",
-    srcs = glob([
-        "src/Tox/Conduit/*.hs",
-    ]),
+    name = "tox-chat",
+    srcs = glob(["src/Tox/Chat/*.lhs"]),
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
     tags = [
@@ -339,14 +355,89 @@ haskell_library(
         ":tox-crypto",
         ":tox-dht",
         ":tox-network",
+        ":tox-onion",
+        ":tox-persistence",
+        ":tox-session",
+        ":tox-tcp",
+        ":tox-transport",
+        "//third_party/haskell:QuickCheck",
         "//third_party/haskell:base",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
-        "//third_party/haskell:conduit",
-        "//third_party/haskell:conduit-extra",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:monad-validate",
+        "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
+    ],
+)
+
+haskell_library(
+    name = "tox-application",
+    srcs = glob([
+        "src/Tox/Application/*.hs",
+        "native/Tox/Application/*.hs",
+    ]),
+    ghcopts = ["-j4"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-chat",
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-discovery",
+        ":tox-network",
+        ":tox-onion",
+        ":tox-persistence",
+        ":tox-session",
+        ":tox-tcp",
+        ":tox-transport",
+        "//third_party/haskell:MonadRandom",
+        "//third_party/haskell:QuickCheck",
+        "//third_party/haskell:base",
+        "//third_party/haskell:base16-bytestring",
+        "//third_party/haskell:binary",
+        "//third_party/haskell:bytestring",
+        "//third_party/haskell:clock",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
         "//third_party/haskell:network",
-        "//third_party/haskell:transformers",
+        "//third_party/haskell:random",
+        "//third_party/haskell:saltine",
+        "//third_party/haskell:stm",
+        "//third_party/haskell:text",
+    ],
+)
+
+# Nodes on a virtual clock, for tests and measuring. Apps don't need it.
+haskell_library(
+    name = "tox-simulator",
+    testonly = True,
+    srcs = ["src/Tox/Simulator.hs"],
+    src_strip_prefix = "src",
+    tags = [
+        "haskell",
+        "no-cross",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":tox-application",
+        ":tox-core",
+        ":tox-crypto",
+        ":tox-dht",
+        ":tox-network",
+        ":tox-session",
+        ":tox-tcp",
+        "//third_party/haskell:MonadRandom",
+        "//third_party/haskell:base",
+        "//third_party/haskell:containers",
+        "//third_party/haskell:random",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -368,12 +459,17 @@ hspec_test(
     deps = [
         ":hs-toxcore",
         ":tox-application",
+        ":tox-chat",
         ":tox-core",
         ":tox-crypto",
         ":tox-dht",
+        ":tox-discovery",
         ":tox-network",
         ":tox-onion",
         ":tox-persistence",
+        ":tox-session",
+        ":tox-simulator",
+        ":tox-tcp",
         ":tox-transport",
         "//hs-msgpack-binary",
         "//hs-msgpack-types",
@@ -385,11 +481,14 @@ hspec_test(
         "//third_party/haskell:bytestring",
         "//third_party/haskell:clock",
         "//third_party/haskell:containers",
+        "//third_party/haskell:ghc-heap",
         "//third_party/haskell:hspec",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
+        "//third_party/haskell:network",
         "//third_party/haskell:random",
         "//third_party/haskell:saltine",
+        "//third_party/haskell:stm",
         "//third_party/haskell:text",
     ],
 )

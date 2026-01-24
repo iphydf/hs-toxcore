@@ -49,8 +49,8 @@ Conference:
 \begin{tabular}{l|l}
   Length        & Contents \\
   \hline
-  \texttt{1}    & \texttt{uint8\_t} Groupchat type \\
-  \texttt{32}   & Groupchat id \\
+  \texttt{1}    & \texttt{uint8\_t} Conference type \\
+  \texttt{32}   & Conference id \\
   \texttt{4}    & \texttt{uint32\_t} Message number \\
   \texttt{2}    & \texttt{uint16\_t} Lossy message number \\
   \texttt{2}    & \texttt{uint16\_t} Peer number \\
@@ -107,14 +107,17 @@ instance Binary Conference where
 
 
 instance Arbitrary Conference where
-    arbitrary = Conference
-        <$> arbitrary
-        <*> arbitrary
-        <*> arbitrary
-        <*> arbitrary
-        <*> arbitrary
-        <*> (BS.pack . take maxTitleLen <$> arbitrary)
-        <*> arbitrary
+    arbitrary = do
+        conference <- Conference
+            <$> arbitrary
+            <*> arbitrary
+            <*> arbitrary
+            <*> arbitrary
+            <*> arbitrary
+            <*> (BS.pack . take maxTitleLen <$> arbitrary)
+            <*> arbitrary
+        -- The saver isn't among its peers.
+        return conference{peers = filter ((/= selfPeerNumber conference) . peerNumber) (peers conference)}
 
 \end{code}
 

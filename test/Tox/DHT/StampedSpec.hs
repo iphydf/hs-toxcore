@@ -40,4 +40,4 @@ spec = do
             (res2, _) = popFirst s1
         in case (res1, res2) of
              (Just (st1, _), Just (st2, _)) -> st1 <= st2
-             _                              -> True -- skip for empty cases
+             _                              -> True
