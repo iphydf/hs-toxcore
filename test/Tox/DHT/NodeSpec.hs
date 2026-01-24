@@ -6,6 +6,7 @@ import           Test.Hspec
 import           Test.QuickCheck
 
 import           Control.Monad.Identity      (runIdentity)
+import           Control.Monad.Logger        (runNoLoggingT)
 import           Control.Monad.Random        (evalRandT)
 import           Control.Monad.State         (runStateT)
 import           Data.Binary                 (Binary, encode)
@@ -21,6 +22,7 @@ import qualified Tox.DHT.DhtPacket           as DhtPacket
 import           Tox.DHT.DhtState            as DhtState
 import           Tox.DHT.Node
 import           Tox.DHT.Operation
+import qualified Tox.DHT.DhtPacket           as DhtPacket
 import qualified Tox.DHT.PingPacket          as Ping
 import           Tox.DHT.RpcPacket
 import qualified Tox.Network.Core.Encoding   as Encoding
@@ -54,6 +56,7 @@ spec = do
             ((_, _), events) = runIdentity
               . Networked.runNetworkLogged
               . (`runStateT` dhtState)
+              . runNoLoggingT
               . (`evalRandT` unwrapArbStdGen seed)
               . (`TimedT.runTimedT` time)
               . (`KeyedT.evalKeyedT` Map.empty)

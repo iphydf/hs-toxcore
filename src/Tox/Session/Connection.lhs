@@ -4,17 +4,19 @@
 {-# LANGUAGE NamedFieldPuns        #-}
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE StrictData            #-}
+{-# LANGUAGE OverloadedStrings     #-}
 module Tox.Session.Connection where
 
 import           Control.Monad.State          (MonadState, gets, modify)
 import           Data.Map                     (Map)
 import qualified Data.Map                     as Map
 import           Data.Word                    (Word64)
+import           Data.Text                    (pack)
 
 import           Tox.Core.Time                (Timestamp)
 import           Tox.Core.Timed               (Timed)
 import qualified Tox.Core.Timed               as Timed
-import           Tox.Crypto.Core.Key               (PublicKey)
+import           Tox.Crypto.Core.Key               (PublicKey, CombinedKey)
 import           Tox.Crypto.Core.KeyPair           (KeyPair)
 import           Tox.DHT.DhtState             (DhtState)
 import           Tox.Network.Core.NodeInfo         (NodeInfo)
@@ -25,6 +27,7 @@ import qualified Tox.Transport.SecureSession    as SecureSession
 import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes)
 import           Tox.Network.Core.Networked        (Networked)
 import           Tox.Crypto.Core.Keyed             (Keyed)
+import           Control.Monad.Logger              (MonadLogger, logInfoN, logWarnN, logDebugN)
 
 {-------------------------------------------------------------------------------
  -
@@ -38,22 +41,23 @@ data FriendStatus
   | FriendKeyFound PublicKey [NodeInfo] -- ^ DHT PK and initial relays
   | FriendConnecting SecureSessionState
   | FriendConnected SecureSessionState
-  deriving (Show)
+  deriving (Eq, Show)
 
 data FriendConnection = FriendConnection
   { fcRealPk     :: PublicKey
   , fcStatus     :: FriendStatus
   , fcLastSeen   :: Maybe Timestamp
-  } deriving (Show)
+  } deriving (Eq, Show)
 
 data ConnectionManager = ConnectionManager
   { friends      :: Map PublicKey FriendConnection
   , ourRealKeys  :: KeyPair
   , ourDhtKeys   :: KeyPair
+  , cookieKey    :: CombinedKey
   }
 
 
-class (Monad m, Timed m, MonadRandomBytes m, Keyed m, Networked m) => ConnectionMonad m where
+class (Monad m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m) => ConnectionMonad m where
   getConnManager :: m ConnectionManager
   putConnManager :: ConnectionManager -> m ()
 
@@ -65,19 +69,22 @@ modifyConn f = getConnManager >>= putConnManager . f
 
 
 -- | Initialize a new connection manager.
-initManager :: KeyPair -> KeyPair -> ConnectionManager
-initManager realKeys dhtKeys = ConnectionManager
+initManager :: KeyPair -> KeyPair -> CombinedKey -> ConnectionManager
+initManager realKeys dhtKeys cKey = ConnectionManager
   { friends = Map.empty
   , ourRealKeys = realKeys
   , ourDhtKeys = dhtKeys
+  , cookieKey = cKey
   }
 
 
 -- | Add a new friend to be managed.
 addFriend :: ConnectionMonad m => PublicKey -> m ()
-addFriend realPk = modifyConn $ \s ->
-  let newFriend = FriendConnection realPk FriendDisconnected Nothing
-  in s { friends = Map.insertWith (\_ old -> old) realPk newFriend (friends s) }
+addFriend realPk = do
+  logInfoN $ "Adding friend: " <> pack (show realPk)
+  modifyConn $ \s ->
+    let newFriend = FriendConnection realPk FriendDisconnected Nothing
+    in s { friends = Map.insertWith (\_ old -> old) realPk newFriend (friends s) }
 
 
 -- | Maintenance loop for friend connections.
@@ -89,6 +96,7 @@ doFriendConnections = do
     f <- getsConn (Map.findWithDefault (error "Friend missing") pk . friends)
     case fcStatus f of
       FriendDisconnected -> do
+        logInfoN $ "Starting Onion search for " <> pack (show pk)
         -- Start onion search
         Onion.startFriendSearch pk
         updateFriendStatus pk FriendSearching
@@ -97,23 +105,28 @@ doFriendConnections = do
         -- Check if onion found the key
         mRelays <- Onion.getsOnion (Map.lookup pk . Onion.searchNodes)
         case mRelays of
-          Nothing -> return ()
-          Just relays | Map.null relays -> return ()
+          Nothing -> do
+             logDebugN $ "Still searching for " <> pack (show pk) <> " (No entry in Onion searchNodes)"
+          Just relays | Map.null relays -> do
+             logDebugN $ "Still searching for " <> pack (show pk) <> " (No relays found yet)"
           Just relays -> do
             -- Found DHT PK
             let dhtPks = Map.keys relays
                 relaysList = map Onion.nodeInfo $ Map.elems relays
             case dhtPks of
-              (dhtPk:_) -> updateFriendStatus pk (FriendKeyFound dhtPk relaysList)
+              (dhtPk:_) -> do
+                logInfoN $ "Onion found DHT Key for " <> pack (show pk) <> ": " <> pack (show dhtPk)
+                updateFriendStatus pk (FriendKeyFound dhtPk relaysList)
               [] -> return ()
 
       FriendKeyFound dhtPk relays -> do
+        logInfoN $ "Initiating SecureSession with " <> pack (show pk) <> " via " <> pack (show $ length relays) <> " relays"
         cm <- getConnManager
         let ourReal = ourRealKeys cm
             ourDht = ourDhtKeys cm
         -- Pick the best relay to start with
         case relays of
-          [] -> return ()
+          [] -> logWarnN $ "No relays found for " <> pack (show pk) <> ", cannot connect"
           (r:_) -> do
             now <- Timed.askTime
             ss <- SecureSession.initSession now ourReal pk ourDht dhtPk r
@@ -121,10 +134,7 @@ doFriendConnections = do
             -- Handshake will be triggered by first send or periodic retry
             return ()
 
-      FriendConnecting ss -> do
-        case SecureSession.ssStatus ss of
-          Just SecureSession.SessionConfirmed -> updateFriendStatus pk (FriendConnected ss)
-          _ -> return () -- Still waiting for handshake
+      FriendConnecting _ -> return () -- Handled by maintainSession
 
       FriendConnected _ -> return () -- All good
   where

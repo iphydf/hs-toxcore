@@ -8,6 +8,8 @@
 
 module Tox.Transport.SecureSessionSpec where
 
+import           Control.Monad.Logger                (MonadLogger, NoLoggingT,
+                                                      runNoLoggingT)
 import           Control.Monad.Random
 import           Control.Monad.State
 import           Data.Binary                         (decode, encode)
@@ -50,11 +52,12 @@ import           Tox.Transport.SecureSession.Manager
 import qualified Tox.Transport.Reliability           as Reliability
 
 -- | A monad for running a full simulation with a SessionManager.
-type ManagerM = KeyedT (TimedT (RandT StdGen (StateT SessionManager (NetworkLogged Identity))))
+newtype ManagerM a = ManagerM { unManagerM :: KeyedT (TimedT (RandT StdGen (NoLoggingT (StateT SessionManager (NetworkLogged Identity))))) a }
+  deriving (Functor, Applicative, Monad, MonadState SessionManager, Timed, MonadRandomBytes, Keyed, Networked, MonadLogger)
 
 runManagerM :: StdGen -> Timestamp -> SessionManager -> ManagerM a -> (a, SessionManager, [NetworkAction])
 runManagerM gen time sm m =
-  let ( (a, sm'), actions ) = runIdentity . runNetworkLogged . (`runStateT` sm) . (`evalRandT` gen) . (`runTimedT` time) . (`evalKeyedT` Map.empty) $ m
+  let ( (a, sm'), actions ) = runIdentity . runNetworkLogged . (`runStateT` sm) . runNoLoggingT . (`evalRandT` gen) . (`runTimedT` time) . (`evalKeyedT` Map.empty) $ unManagerM m
   in (a, sm', actions)
 
 spec :: Spec

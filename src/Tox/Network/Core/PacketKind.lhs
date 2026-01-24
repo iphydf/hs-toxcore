@@ -77,6 +77,7 @@ data PacketKind
   | OnionResponse2
   | OnionResponse1
   | BootstrapInfo
+  | DHTPKPacket
   deriving (Eq, Read, Show, Bounded, Enum, Generic, Typeable)
 
 
@@ -106,6 +107,7 @@ kindDescription = \case
   OnionResponse2    -> "Second level wrapped onion response"
   OnionResponse1    -> "First level wrapped onion response"
   BootstrapInfo     -> "Bootstrap node info request and response"
+  DHTPKPacket       -> "DHT public key packet"
 
 
 kindToByte :: PacketKind -> Word8
@@ -131,6 +133,7 @@ kindToByte = \case
   OnionResponse2    -> 0x8d
   OnionResponse1    -> 0x8e
   BootstrapInfo     -> 0xf0
+  DHTPKPacket       -> 0x9c
 
 
 byteToKind :: Word8 -> Maybe PacketKind

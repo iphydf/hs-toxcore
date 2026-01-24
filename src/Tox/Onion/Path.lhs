@@ -154,19 +154,19 @@ pickNodes nodes =
 
 
 -- | Wrap data into a nested Onion Request payload.
-wrapPath :: Keyed m
-         => KeyPair        -- ^ Our DHT KeyPair
+wrapPath :: (Keyed m, MonadRandomBytes m)
+         => KeyPair        -- ^ Our Persistent DHT KeyPair (to match wrapOnion0 signature, but we'll use ephemeral)
          -> OnionPath      -- ^ The path to follow (A, B, C)
          -> SocketAddress  -- ^ Final destination Node D
          -> Nonce          -- ^ Nonce for all layers
-         -> CipherText     -- ^ Final encrypted payload for Node D
+         -> BS.ByteString  -- ^ Final raw payload for Node D (e.g. 0x83 envelope)
          -> m Tunnel.OnionRequest0
-wrapPath ourKeyPair path destAddr nonce innerData =
+wrapPath _persistentKeyPair path destAddr nonce innerData =
   case (pathNodes path, pathKeys path) of
     ([nodeA, nodeB, nodeC], [kp1, kp2, kp3]) -> do
       -- Layer 3: Encrypted with kp2 (SK2) for Node C (nodeC)
-      -- Decrypted by C to find D and the final payload.
-      let p3 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort destAddr) (KeyPair.publicKey kp3) innerData
+      -- Decrypted by C to find D and the raw data.
+      let p3 = Tunnel.OnionRequestPayloadFinal (Tunnel.OnionIPPort destAddr) innerData
       combined3 <- Keyed.getCombinedKey (KeyPair.secretKey kp2) (NodeInfo.publicKey nodeC)
       let enc3 = Box.encrypt combined3 nonce (Box.encode p3)
 
@@ -176,10 +176,12 @@ wrapPath ourKeyPair path destAddr nonce innerData =
       combined2 <- Keyed.getCombinedKey (secretKey kp1) (NodeInfo.publicKey nodeB)
       let enc2 = Box.encrypt combined2 nonce (Box.encode p2)
 
-      -- Layer 1: Encrypted with our DHT key for Node A (nodeA)
+      -- Layer 1: Encrypted with an ephemeral DHT key for Node A (nodeA)
       -- Decrypted by A to find B and Layer 2.
+      -- The spec says to use a temporary DHT key for Layer 0.
+      ephemeralKeyPair <- newKeyPair
       let p1 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort (NodeInfo.address nodeB)) (KeyPair.publicKey kp1) enc2
-      Tunnel.wrapOnion0 ourKeyPair (NodeInfo.publicKey nodeA) nonce p1
+      Tunnel.wrapOnion0 ephemeralKeyPair (NodeInfo.publicKey nodeA) nonce p1
     _ -> error "wrapPath: OnionPath must have exactly 3 nodes and 3 keys"
 \end{code}
 

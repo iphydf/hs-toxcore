@@ -8,6 +8,7 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE StrictData            #-}
+{-# LANGUAGE OverloadedStrings     #-}
 module Tox.DHT.Operation where
 
 import           Control.Monad                (guard, msum, replicateM, unless,
@@ -57,6 +58,8 @@ import           Tox.DHT.PingPacket           (PingPacket (..))
 import           Tox.DHT.RpcPacket            (RpcPacket (..))
 import qualified Tox.DHT.RpcPacket            as RpcPacket
 import qualified Tox.DHT.Stamped              as Stamped
+import qualified Tox.DHT.RpcPacket            as RpcPacket
+import qualified Tox.DHT.Stamped              as Stamped
 import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes)
 import qualified Tox.Crypto.Core.MonadRandomBytes as MonadRandomBytes
 import           Tox.Network.Core.Networked        (Networked)
@@ -68,6 +71,8 @@ import           Tox.Network.Core.PacketKind       (PacketKind)
 import qualified Tox.Network.Core.PacketKind       as PacketKind
 import           Tox.Network.Core.TimedT           (TimedT)
 import qualified Tox.Network.Core.TimedT           as TimedT
+import           Control.Monad.Logger              (logInfoN, MonadLogger, NoLoggingT, runNoLoggingT)
+import           Data.Text                         (pack)
 
 {-------------------------------------------------------------------------------
  -
@@ -80,11 +85,13 @@ class
   , Timed m
   , MonadRandomBytes m
   , Keyed m
+  , MonadLogger m
   ) => DhtNodeMonad m where
   getDhtState :: m DhtState
   putDhtState :: DhtState -> m ()
   -- | Handle a decrypted payload from a DHT Request packet addressed to us.
   handleDhtRequestPayload :: NodeInfo -> DhtPacket.DhtPacket -> m ()
+  handleDhtRequestPayload _ _ = return ()
 
 instance (Monoid w, DhtNodeMonad m) => DhtNodeMonad (WriterT w m) where
   getDhtState = lift getDhtState
@@ -367,6 +374,7 @@ handleNodesResponse from (RpcPacket (NodesResponse nodes) requestId) = do
   isReply <- checkPending requireNodesResponseWithin from requestId
   when isReply $ do
     time <- Timed.askTime
+    logInfoN $ "Adding node to DHT from NodesResponse: " <> pack (show $ NodeInfo.publicKey from)
     modifyDht $ DhtState.addNode time from
     for_ nodes $ \node ->
       (>>= mapM_ sendNodesRequest) $ (<$> getDht) $ DhtState.foldMapNodeLists $
@@ -455,6 +463,7 @@ handlePingResponse from (RpcPacket PingResponse requestId) = do
   ourPublicKey <- getsDht $ KeyPair.publicKey . DhtState.dhtKeyPair
   when (isReply && ourPublicKey /= NodeInfo.publicKey from) $ do
     time <- Timed.askTime
+    logInfoN $ "Adding node to DHT from PingResponse: " <> pack (show $ NodeInfo.publicKey from)
     modifyDht $ DhtState.addNode time from
 handlePingResponse _ _ = return ()
 
@@ -580,17 +589,17 @@ TODO: consider giving min and max values for the constants.
  -
  ------------------------------------------------------------------------------}
 
-type TestDhtNodeMonad = KeyedT (TimedT (RandT StdGen (StateT DhtState (Networked.NetworkLogged Identity))))
+type TestDhtNodeMonad = KeyedT (TimedT (RandT StdGen (NoLoggingT (StateT DhtState (Networked.NetworkLogged Identity)))))
 instance DhtNodeMonad TestDhtNodeMonad where
   getDhtState = get
   putDhtState = put
-  handleDhtRequestPayload _ _ = return ()
 
 runTestDhtNode :: ArbStdGen -> Timestamp -> DhtState -> TestDhtNodeMonad a -> (a, DhtState)
 runTestDhtNode seed time s =
   runIdentity
     . Networked.evalNetworkLogged
     . (`runStateT` s)
+    . runNoLoggingT
     . (`evalRandT` unwrapArbStdGen seed)
     . (`TimedT.runTimedT` time)
     . (`KeyedT.evalKeyedT` Map.empty)

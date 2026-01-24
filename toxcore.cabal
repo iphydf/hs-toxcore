@@ -119,6 +119,7 @@ library
     , integer-gmp
     , iproute
     , lens-family
+    , monad-logger
     , monad-validate
     , MonadRandom
     , msgpack-arbitrary
@@ -129,6 +130,7 @@ library
     , QuickCheck         >=2.9.1
     , random             <1.3
     , saltine            >=0.2
+    , text
     , transformers
 
 executable toxsave-convert
@@ -217,6 +219,7 @@ test-suite testsuite
     Tox.Onion.PathSpec
     Tox.Onion.RPCSpec
     Tox.Onion.TunnelSpec
+    Tox.OnionPacketSpec
     Tox.Persistence.BytesSpec
     Tox.Persistence.ConferencesSpec
     Tox.Persistence.DHTSpec
@@ -224,6 +227,7 @@ test-suite testsuite
     Tox.Persistence.GroupsSpec
     Tox.Persistence.NodesSpec
     Tox.PersistenceSpec
+    Tox.SpecComplianceSpec
     Tox.Transport.ReliabilitySpec
     Tox.Transport.SecureSessionSpec
     Tox.Transport.StreamSpec
@@ -237,6 +241,7 @@ test-suite testsuite
     , clock
     , containers
     , hspec
+    , monad-logger
     , monad-validate
     , MonadRandom
     , msgpack-binary

@@ -45,6 +45,7 @@ data Messenger = Messenger
   , selfName         :: ByteString
   , selfStatus       :: UserStatus
   , selfMsg          :: ByteString
+  , selfNospam       :: Word32
   }
 
 class (Monad m, Connection.ConnectionMonad m) => MessengerMonad m where
@@ -59,12 +60,13 @@ modifyMessenger f = getMessenger >>= putMessenger . f
 
 
 -- | Initialize a new Messenger.
-initMessenger :: Messenger
-initMessenger = Messenger
+initMessenger :: Word32 -> Messenger
+initMessenger nospam = Messenger
   { messengerFriends = Map.empty
   , selfName         = ""
   , selfStatus       = Online
   , selfMsg          = ""
+  , selfNospam       = nospam
   }
 
 -- | Add a friend to Messenger and initiate connection.

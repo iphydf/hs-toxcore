@@ -65,8 +65,10 @@ haskell_library(
         "//third_party/haskell:bytestring",
         "//third_party/haskell:clock",
         "//third_party/haskell:containers",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:mtl",
         "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -93,9 +95,11 @@ haskell_library(
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
         "//third_party/haskell:containers",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
         "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -121,7 +125,9 @@ haskell_library(
         "//third_party/haskell:base",
         "//third_party/haskell:bytestring",
         "//third_party/haskell:containers",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:mtl",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -208,6 +214,7 @@ haskell_library(
         "//third_party/haskell:bytestring",
         "//third_party/haskell:containers",
         "//third_party/haskell:entropy",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
         "//third_party/haskell:random",
@@ -240,6 +247,7 @@ haskell_library(
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
         "//third_party/haskell:iproute",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:mtl",
         "//third_party/haskell:network",
         "//third_party/haskell:random",
@@ -267,6 +275,7 @@ haskell_library(
         "//hs-msgpack-binary",
         "//hs-msgpack-types",
         "//third_party/haskell:MonadRandom",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:QuickCheck",
         "//third_party/haskell:base",
         "//third_party/haskell:binary",
@@ -277,6 +286,7 @@ haskell_library(
         "//third_party/haskell:mtl",
         "//third_party/haskell:random",
         "//third_party/haskell:saltine",
+        "//third_party/haskell:text",
         "//third_party/haskell:transformers",
     ],
 )
@@ -334,11 +344,15 @@ haskell_library(
         ":tox-session",
         "//third_party/haskell:QuickCheck",
         "//third_party/haskell:base",
+        "//third_party/haskell:base16-bytestring",
         "//third_party/haskell:binary",
         "//third_party/haskell:bytestring",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:monad-validate",
+        "//third_party/haskell:MonadRandom",
         "//third_party/haskell:mtl",
         "//third_party/haskell:network",
+        "//third_party/haskell:text",
     ],
 )
 
@@ -364,6 +378,7 @@ haskell_library(
         "//third_party/haskell:bytestring",
         "//third_party/haskell:conduit",
         "//third_party/haskell:conduit-extra",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:mtl",
         "//third_party/haskell:network",
         "//third_party/haskell:transformers",
@@ -406,6 +421,7 @@ hspec_test(
         "//third_party/haskell:clock",
         "//third_party/haskell:containers",
         "//third_party/haskell:hspec",
+        "//third_party/haskell:monad-logger",
         "//third_party/haskell:monad-validate",
         "//third_party/haskell:mtl",
         "//third_party/haskell:random",

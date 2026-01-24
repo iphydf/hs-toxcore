@@ -14,11 +14,12 @@ import           Tox.Core.Time                    (Timestamp)
 import           Tox.Core.Timed                   (Timed (..))
 import           Tox.Crypto.Core.Keyed            (Keyed)
 import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes)
+import           Control.Monad.Logger             (MonadLogger)
 import           Tox.Network.Core.Networked       (Networked)
 
 newtype TimedT m a = TimedT (ReaderT Timestamp m a)
   deriving (Monad, Applicative, Functor, MonadState s, MonadWriter w
-    , MonadRandomBytes, MonadTrans, MonadIO, Networked, Keyed)
+    , MonadRandomBytes, MonadTrans, MonadIO, Networked, Keyed, MonadLogger)
 
 runTimedT :: TimedT m a -> Timestamp -> m a
 runTimedT (TimedT m) = runReaderT m
