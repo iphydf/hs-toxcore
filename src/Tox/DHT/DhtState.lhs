@@ -8,32 +8,35 @@
 {-# LANGUAGE StrictData            #-}
 module Tox.DHT.DhtState where
 
-import           Control.Applicative       (Const (..), getConst, (<|>))
-import           Data.Functor.Identity     (Identity (..))
-import           Data.List                 (nub, sortBy)
-import           Data.Map                  (Map)
-import qualified Data.Map                  as Map
-import qualified Data.Maybe                as Maybe
-import           Data.Monoid               (All (..), getAll)
-import           Data.Ord                  (comparing)
-import           Lens.Family2              (Lens')
-import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary, shrink)
+import           Control.Applicative            (Const (..), getConst, (<|>))
+import           Data.Functor.Identity          (Identity (..))
+import           Data.List                      (nub, sortBy)
+import           Data.Map                       (Map)
+import qualified Data.Map                       as Map
+import qualified Data.Maybe                     as Maybe
+import           Data.Monoid                    (All (..), getAll)
+import           Data.Ord                       (comparing)
+import           Lens.Family2                   (Lens')
+import           Test.QuickCheck.Arbitrary      (Arbitrary, arbitrary, shrink)
 
-import           Tox.Core.Time             (Timestamp)
+import           Data.Word                      (Word32, Word64)
+import           Tox.Core.Time                  (Timestamp)
 import           Tox.Crypto.Core.Key            (PublicKey)
-import           Tox.Crypto.Core.KeyPair        (KeyPair)
 import qualified Tox.Crypto.Core.KeyPair        as KeyPair
-import           Tox.DHT.ClientList        (ClientList)
-import qualified Tox.DHT.ClientList        as ClientList
-import           Tox.DHT.Distance          (Distance)
-import           Tox.DHT.KBuckets          (KBuckets)
-import qualified Tox.DHT.KBuckets          as KBuckets
-import           Tox.DHT.NodeList          (NodeList)
-import qualified Tox.DHT.NodeList          as NodeList
-import           Tox.DHT.PendingReplies    (PendingReplies)
-import qualified Tox.DHT.Stamped           as Stamped
-import           Tox.Network.Core.NodeInfo      (NodeInfo)
+import           Tox.Crypto.Core.KeyPair        (KeyPair)
+import qualified Tox.DHT.ClientList             as ClientList
+import           Tox.DHT.ClientList             (ClientList)
+import           Tox.DHT.Distance               (Distance)
+import qualified Tox.DHT.KBuckets               as KBuckets
+import           Tox.DHT.KBuckets               (KBuckets)
+import qualified Tox.DHT.NodeList               as NodeList
+import           Tox.DHT.NodeList               (NodeList)
+import           Tox.DHT.PendingReplies         (PendingReplies)
+import qualified Tox.DHT.Stamped                as Stamped
 import qualified Tox.Network.Core.NodeInfo      as NodeInfo
+import           Tox.Network.Core.NodeInfo      (NodeInfo)
+import qualified Tox.Network.Core.SocketAddress as SocketAddress
+import           Tox.Network.Core.SocketAddress (SocketAddress)
 
 
 {-------------------------------------------------------------------------------
@@ -72,6 +75,7 @@ data DhtState = DhtState
 
   , dhtCloseListStamp :: ListStamp
   , dhtPendingReplies :: PendingReplies
+  , dhtSelfAddress    :: Maybe SocketAddress -- ^ Where other nodes say we are.
   }
   deriving (Eq, Read, Show)
 
@@ -106,7 +110,7 @@ Lists are initialised to be empty.
 empty :: Timestamp -> KeyPair -> DhtState
 empty time keyPair =
   DhtState keyPair (KBuckets.empty $ KeyPair.publicKey keyPair)
-    Map.empty (newListStamp time) Stamped.empty
+    Map.empty (newListStamp time) Stamped.empty Nothing
 
 \end{code}
 
@@ -130,10 +134,31 @@ Lists simultaneously.
 
 data DhtSearchEntry = DhtSearchEntry
   { searchNode       :: Maybe NodeInfo
+  , searchSeen       :: Maybe Timestamp
+    -- ^ When the searched node last answered us itself.
   , searchStamp      :: ListStamp
   , searchClientList :: ClientList
+  , searchReturned   :: Map PublicKey (SocketAddress, Timestamp)
+    -- ^ Where Client List nodes say the searched node is, by their key.
+  , searchNat        :: NatState
   }
   deriving (Eq, Read, Show)
+
+-- | Hole punching towards a searched node behind a NAT.
+data NatState = NatState
+  { natPingId       :: Word64
+  , natPingSent     :: Maybe Timestamp
+  , natPingRecv     :: Maybe Timestamp -- ^ When the node last sent us a NAT ping.
+  , natPunching     :: Bool            -- ^ It answered our NAT ping.
+  , natPunched      :: Maybe Timestamp
+  , natTries        :: Int
+  , natPortIndex    :: Word32
+  , natLowPortIndex :: Word32
+  }
+  deriving (Eq, Read, Show)
+
+emptyNatState :: NatState
+emptyNatState = NatState 1 Nothing Nothing False Nothing 0 0 0
 
 _searchNode :: Lens' DhtSearchEntry (Maybe NodeInfo)
 _searchNode f d@DhtSearchEntry{ searchNode = a } =
@@ -159,8 +184,8 @@ Client List is initialised to be empty.
 
 emptySearchEntry :: Timestamp -> PublicKey -> DhtSearchEntry
 emptySearchEntry time publicKey =
-  DhtSearchEntry Nothing (newListStamp time) $
-    ClientList.empty publicKey searchEntryClientListSize
+  DhtSearchEntry Nothing Nothing (newListStamp time)
+    (ClientList.empty publicKey searchEntryClientListSize) Map.empty emptyNatState
 
 \end{code}
 
@@ -262,7 +287,7 @@ entry is associated (i.e. the node being search for).
 
 addNode :: Timestamp -> NodeInfo -> DhtState -> DhtState
 addNode time nodeInfo =
-  updateSearchNode (NodeInfo.publicKey nodeInfo) (Just nodeInfo)
+  updateSearchNode (NodeInfo.publicKey nodeInfo) (Just (nodeInfo, time))
   . mapNodeLists addUnlessBase
   where
     addUnlessBase nodeList
@@ -298,6 +323,13 @@ instance NodeList DhtState where
 takeClosestNodesTo :: Int -> PublicKey -> DhtState -> [ NodeInfo ]
 takeClosestNodesTo n publicKey = map snd . take n . closeNodes publicKey
 
+-- | LAN nodes only if the requester is on a LAN too, as in toxcore.
+takeClosestNodesFor :: SocketAddress -> Int -> PublicKey -> DhtState -> [ NodeInfo ]
+takeClosestNodesFor requester n publicKey =
+  take n . filter visible . map snd . closeNodes publicKey
+  where
+    visible node = SocketAddress.isLan requester || not (SocketAddress.isLan $ NodeInfo.address node)
+
 mapBuckets :: (KBuckets -> KBuckets) -> DhtState -> DhtState
 mapBuckets f dhtState@DhtState { dhtCloseList } =
   dhtState
@@ -315,13 +347,13 @@ mapSearchClientLists f =
     mapSearchEntry $ \entry@DhtSearchEntry{ searchClientList } ->
       entry { searchClientList = f searchClientList }
 
-updateSearchNode :: PublicKey -> Maybe NodeInfo -> DhtState -> DhtState
-updateSearchNode publicKey nodeInfo dhtState@DhtState { dhtSearchList } =
+updateSearchNode :: PublicKey -> Maybe (NodeInfo, Timestamp) -> DhtState -> DhtState
+updateSearchNode publicKey seen dhtState@DhtState { dhtSearchList } =
   dhtState
     { dhtSearchList = Map.adjust update publicKey dhtSearchList
     }
   where
-    update entry = entry { searchNode = nodeInfo }
+    update entry = entry { searchNode = fst <$> seen, searchSeen = snd <$> seen }
 
 \end{code}
 
@@ -334,6 +366,29 @@ entry is unset. The search entry itself is not removed.
 containsNode :: PublicKey -> DhtState -> Bool
 containsNode publicKey =
   NodeList.foldNodes (\a x -> a || NodeInfo.publicKey x == publicKey) False
+
+findNode :: PublicKey -> DhtState -> Maybe NodeInfo
+findNode publicKey =
+  NodeList.foldNodes (\a x -> a <|> if NodeInfo.publicKey x == publicKey then Just x else Nothing) Nothing
+
+\end{code}
+
+A node in the Client List of a search entry may tell us in a Nodes Response
+where the searched node is.  We keep where each such node says it is.
+
+\begin{code}
+
+recordReturned :: Timestamp -> NodeInfo -> NodeInfo -> DhtState -> DhtState
+recordReturned now from node s = s
+  { dhtSearchList = Map.adjust record (NodeInfo.publicKey node) (dhtSearchList s) }
+  where
+    record e
+      | inList (NodeInfo.publicKey from) =
+          e { searchReturned = Map.filterWithKey (const . inList) $
+                Map.insert (NodeInfo.publicKey from) (NodeInfo.address node, now) (searchReturned e) }
+      | otherwise = e
+      where
+        inList pk = Maybe.isJust $ ClientList.lookup pk (searchClientList e)
 
 
 {-------------------------------------------------------------------------------
