@@ -221,7 +221,9 @@ test-suite testsuite
     Tox.Persistence.GroupsSpec
     Tox.Persistence.NodesSpec
     Tox.PersistenceSpec
+    Tox.Transport.ReliabilitySpec
     Tox.Transport.SecureSessionSpec
+    Tox.Transport.StreamSpec
 
   build-tool-depends: hspec-discover:hspec-discover
   build-depends:

@@ -1,6 +1,204 @@
 \begin{code}
-{-# LANGUAGE StrictData #-}
+{-# LANGUAGE StrictData                 #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE OverloadedStrings          #-}
+
 module Tox.Transport.Reliability where
+
+import           Data.Binary               (Binary, get, put)
+import qualified Data.Binary.Get           as Get
+import qualified Data.Binary.Put           as Put
+import           Data.Word                 (Word32, Word8)
+import           Data.Map                  (Map)
+import qualified Data.Map                  as Map
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.Lazy      as LBS
+
+-- | Sequence Number (32-bit with wrap-around).
+newtype SeqNum = SeqNum Word32
+  deriving (Eq, Binary, Show, Num, Enum)
+
+-- | Custom ordering for sequence numbers to handle rollover.
+-- A sequence number 'a' is considered less than 'b' if it is within
+-- the first half of the 32-bit space following 'a' (circularly).
+instance Ord SeqNum where
+  compare (SeqNum a) (SeqNum b)
+    | a == b = EQ
+    | b - a < 0x80000000 = LT
+    | otherwise = GT
+
+
+-- | Header for reliable transport (lossy or lossless).
+data ReliablePacket = ReliablePacket
+  { rpRecvBufferStart :: SeqNum -- ^ Our next expected recv packet number
+  , rpPacketNumber    :: SeqNum -- ^ This packet's number (lossless) or next seq (lossy)
+  , rpIsLossless      :: Bool   -- ^ Discriminator for packet type
+  , rpPayload         :: BS.ByteString
+  } deriving (Eq, Show)
+
+instance Binary ReliablePacket where
+  put rp = do
+    put $ rpRecvBufferStart rp
+    put $ rpPacketNumber rp
+    -- The protocol doesn't explicitly flag lossless/lossy in the header,
+    -- it relies on the first byte of payload (Data ID) or context.
+    -- However, the spec says: "uint32_t packet number if lossless,
+    -- sendbuffer buffer_end if lossy".
+    Put.putByteString $ rpPayload rp
+
+  get = do
+    recvStart <- get
+    pktNum <- get
+    payload <- LBS.toStrict <$> Get.getRemainingLazyByteString
+    -- Note: rpIsLossless needs to be determined by the caller based on Data ID.
+    return $ ReliablePacket recvStart pktNum True payload
+
+
+-- | State for the reliability layer.
+data ReliabilityState = ReliabilityState
+  { rsNextSendSeq     :: SeqNum            -- ^ Sequence number for next outgoing lossless packet
+  , rsNextRecvSeq     :: SeqNum            -- ^ Sequence number of next expected incoming packet
+  , rsPeerNextRecvSeq :: SeqNum            -- ^ Highest contiguous sequence peer has received
+  , rsSendWindow      :: Map SeqNum BS.ByteString -- ^ Sent packets awaiting ACK
+  , rsRecvWindow      :: Map SeqNum BS.ByteString -- ^ Out-of-order received packets
+  } deriving (Eq, Show)
+
+-- | Initial state for a new connection.
+initState :: ReliabilityState
+initState = ReliabilityState
+  { rsNextSendSeq     = 0
+  , rsNextRecvSeq     = 0
+  , rsPeerNextRecvSeq = 0
+  , rsSendWindow      = Map.empty
+  , rsRecvWindow      = Map.empty
+  }
+
+-- | A request for missing packets.
+data PacketRequest = PacketRequest
+  { prMissingDeltas :: [Word32] -- ^ Deltas from the last missing packet
+  } deriving (Eq, Show)
+
+instance Binary PacketRequest where
+  put pr = do
+    Put.putWord8 1 -- ID for packet request
+    mapM_ putDelta (prMissingDeltas pr)
+    where
+      putDelta d | d < 255 = Put.putWord8 (fromIntegral d)
+      putDelta d = do
+        Put.putWord8 0
+        putDelta (d - 255)
+
+  get = do
+    _ <- Get.getWord8 -- Skip ID
+    deltas <- getDeltas
+    return $ PacketRequest deltas
+    where
+      getDeltas = do
+        empty <- Get.isEmpty
+        if empty then return [] else do
+          d <- Get.getWord8
+          if d == 0
+            then do
+              ds <- getDeltas
+              case ds of
+                []     -> return [255]
+                (x:xs) -> return (x + 255 : xs)
+            else (fromIntegral d :) <$> getDeltas
+
+
+-- | Process an incoming reliable packet.
+-- Returns the updated state and any newly deliverable payloads.
+handleIncoming :: ReliablePacket -> ReliabilityState -> (ReliabilityState, [BS.ByteString])
+handleIncoming pkt state =
+  let
+    -- 1. Peer is telling us they received everything before rpRecvBufferStart pkt
+    -- Clear acknowledged packets from our send window
+    (_, remainingSend) = Map.partitionWithKey (\k _ -> k < rpRecvBufferStart pkt) (rsSendWindow state)
+
+    -- 2. Buffer this packet if it's new and in/after our window
+    newRecvWindow = if rpPacketNumber pkt >= rsNextRecvSeq state && Map.notMember (rpPacketNumber pkt) (rsRecvWindow state)
+                    then Map.insert (rpPacketNumber pkt) (rpPayload pkt) (rsRecvWindow state)
+                    else rsRecvWindow state
+
+    -- 3. Pull deliverable packets from the recv window
+    (deliverable, finalRecvWindow, finalNextRecvSeq) = extractDeliverable (rsNextRecvSeq state) newRecvWindow
+
+    newState = state
+      { rsSendWindow  = remainingSend
+      , rsRecvWindow  = finalRecvWindow
+      , rsNextRecvSeq = finalNextRecvSeq
+      }
+  in
+    (newState, deliverable)
+
+
+-- | Generate a request for all currently missing packets in our recv window.
+createPacketRequest :: ReliabilityState -> Maybe PacketRequest
+createPacketRequest state =
+  case Map.keys (rsRecvWindow state) of
+    [] -> Nothing
+    keys ->
+      let highest = maximum keys
+          allExpected = [rsNextRecvSeq state .. highest]
+          missing = filter (`Map.notMember` rsRecvWindow state) allExpected
+      in if null missing
+         then Nothing
+         else Just $ PacketRequest $ calculateDeltas (rsNextRecvSeq state) missing
+  where
+    calculateDeltas _ [] = []
+    calculateDeltas prev (x:xs) =
+      let SeqNum lastVal = prev
+          SeqNum xVal = x
+      in (xVal - lastVal) : calculateDeltas x xs
+
+
+-- | Pull contiguous packets from the recv window starting at 'next'.
+extractDeliverable :: SeqNum -> Map SeqNum BS.ByteString -> ([BS.ByteString], Map SeqNum BS.ByteString, SeqNum)
+extractDeliverable next window =
+  case Map.lookup next window of
+    Nothing -> ([], window, next)
+    Just payload ->
+      let (rest, finalWindow, finalNext) = extractDeliverable (next + 1) (Map.delete next window)
+      in (payload : rest, finalWindow, finalNext)
+
+
+-- | Create a new outgoing lossless packet.
+createLossless :: BS.ByteString -> ReliabilityState -> (ReliablePacket, ReliabilityState)
+createLossless payload state =
+  let
+    pktNum = rsNextSendSeq state
+    pkt = ReliablePacket
+      { rpRecvBufferStart = rsNextRecvSeq state
+      , rpPacketNumber    = pktNum
+      , rpIsLossless      = True
+      , rpPayload         = payload
+      }
+    newState = state
+      { rsNextSendSeq = pktNum + 1
+      , rsSendWindow  = Map.insert pktNum payload (rsSendWindow state)
+      }
+  in
+    (pkt, newState)
+
+
+-- | Process a packet request from the peer and identify packets to resend.
+-- Returns the updated state and the list of packets that should be resent.
+handlePacketRequest :: PacketRequest -> ReliabilityState -> ([ReliablePacket], ReliabilityState)
+handlePacketRequest req state =
+  let
+    missingSeqs = reconstructMissing (rsNextRecvSeq state) (prMissingDeltas req)
+    -- We use our current nextRecvSeq as the base for the resent packets' headers
+    toResend = Map.filterWithKey (\k _ -> k `elem` missingSeqs) (rsSendWindow state)
+    res packets = Map.foldrWithKey (\s payload acc ->
+      ReliablePacket (rsNextRecvSeq state) s True payload : acc) [] packets
+  in
+    (res toResend, state)
+  where
+    reconstructMissing _ [] = []
+    reconstructMissing base (d:ds) =
+      let SeqNum baseVal = base
+          next = SeqNum (baseVal + d)
+      in next : reconstructMissing next ds
 \end{code}
 
 Data in the encrypted packets:
