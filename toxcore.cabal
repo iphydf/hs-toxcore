@@ -33,6 +33,7 @@ library
     Tox.Application.GroupChat
     Tox.Application.GroupChatPackets
     Tox.Application.LegacyGroup
+    Tox.Application.State
     Tox.Core.Bits
     Tox.Core.Bits.Get
     Tox.Core.Bits.Put
@@ -89,6 +90,7 @@ library
     Tox.Onion.Path
     Tox.Onion.RPC
     Tox.Onion.Tunnel
+    Tox.Onion.Operation
     Tox.Persistence
     Tox.Persistence.Bytes
     Tox.Persistence.Conferences
@@ -211,6 +213,7 @@ test-suite testsuite
     Tox.Network.Core.ProtocolSpec
     Tox.Network.Core.SocketAddressSpec
     Tox.Network.Core.TransportProtocolSpec
+    Tox.Onion.OperationSpec
     Tox.Onion.PathSpec
     Tox.Onion.TunnelSpec
     Tox.Onion.RPCSpec
