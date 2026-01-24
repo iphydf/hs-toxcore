@@ -1,49 +1,79 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Tox.Transport.ReliabilitySpec where
 
 import qualified Data.ByteString           as BS
+import           Data.List                 (foldl', sortOn)
 import qualified Data.Map                  as Map
+import           Data.Maybe                (fromJust, fromMaybe, isNothing)
+import qualified Data.Set                  as Set
+import           Data.Word                 (Word8)
 import           Test.Hspec
+import           Test.QuickCheck
+
+import qualified Tox.Core.Time             as Time
 import           Tox.Transport.Reliability
+
+-- | Sent @n@ packets at time 0.
+sender :: Int -> ReliabilityState
+sender n = foldl' send initState [1 .. n]
+  where
+    send rs i =
+      let (num, rs') = fromJust $ addSent (BS.singleton $ fromIntegral i) rs
+      in markSent (Time.fromSeconds 0) num rs'
 
 spec :: Spec
 spec = do
-  describe "Sequence Numbers" $ do
-    it "handles basic comparison" $ do
-      SeqNum 1 < SeqNum 2 `shouldBe` True
-      SeqNum 2 > SeqNum 1 `shouldBe` True
-
-    it "handles rollover comparison" $ do
-      SeqNum 0xFFFFFFFF < SeqNum 0 `shouldBe` True
-      SeqNum 0 > SeqNum 0xFFFFFFFF `shouldBe` True
-      SeqNum 0xFFFFFFFE < SeqNum 1 `shouldBe` True
-
-  describe "Reliability Logic" $ do
-    let s0 = initState
-
-    it "extracts contiguous packets" $ do
-      let window = Map.fromList [(SeqNum 0, "a"), (SeqNum 1, "b"), (SeqNum 3, "d")]
-          (deliverable, remaining, next) = extractDeliverable 0 window
-      deliverable `shouldBe` ["a", "b"]
-      Map.keys remaining `shouldBe` [SeqNum 3]
-      next `shouldBe` SeqNum 2
-
-    it "handles incoming out-of-order packets" $ do
-      let p1 = ReliablePacket 0 1 True "b"
-          (s1, d1) = handleIncoming p1 s0
+  describe "receiving" $ do
+    it "delivers packets in order once the gap is filled" $ do
+      let s1 = fromJust $ addReceived 1 "b" initState
+          (d1, s1') = takeReceived s1
+          s2 = fromJust $ addReceived 0 "a" s1'
+          (d2, _) = takeReceived s2
       d1 `shouldBe` []
-      rsNextRecvSeq s1 `shouldBe` 0
-      Map.keys (rsRecvWindow s1) `shouldBe` [SeqNum 1]
-
-      let p0 = ReliablePacket 0 0 True "a"
-          (s2, d2) = handleIncoming p0 s1
       d2 `shouldBe` ["a", "b"]
-      rsNextRecvSeq s2 `shouldBe` 2
-      Map.keys (rsRecvWindow s2) `shouldBe` []
 
-    it "clears send window on peer ACKs" $ do
-      let (_, s1) = createLossless "msg1" s0
-          (_, s2) = createLossless "msg2" s1
-          p = ReliablePacket 1 0 True "ack" -- Peer says they received up to 1
-          (s3, _) = handleIncoming p s2
-      Map.keys (rsSendWindow s3) `shouldBe` [SeqNum 1]
+    it "rejects duplicates" $ do
+      let s1 = fromJust $ addReceived 3 "x" initState
+      addReceived 3 "x" s1 `shouldBe` Nothing
+
+  describe "request packets" $
+    it "make the sender resend exactly the missing packets" $
+      property $ \(Positive n') (received :: [Int]) ->
+        let n = n' `mod` 1000 + 1
+            got = Set.fromList $ map (`mod` n) received
+            recv = fromJust $ setReceivedEnd (fromIntegral n) $
+              foldl' (\rs i -> fromJust $ addReceived (fromIntegral i) "x" rs) initState (Set.toList got)
+            request = requestPacket maxCryptoDataSize recv
+            sent' = fst . fromJust $ handleRequest (Time.fromSeconds 10) (Time.seconds 1) request (sender n)
+            missing = [fromIntegral i | i <- [0 .. n - 1], Set.notMember i got]
+        in map fst (unsentPackets sent') `shouldBe` missing
+
+  describe "the packets still to send" $
+    it "are kept in step with the buffer, in order, as numbers wrap round" $
+      property $ \(Small below :: Small Int) (steps :: [(Int, Int, [Word8])]) ->
+        let start = maxBound - fromIntegral (below `mod` 8)
+            begun = initState { rsSend = PacketsArray start start Map.empty }
+            rs = foldl' step begun steps
+            send = rsSend rs
+            unsent = [ k | (k, p) <- Map.toList (paPackets send), isNothing (spSentTime p) ]
+        in (rsUnsent rs, map fst (unsentPackets rs))
+           `shouldBe` (Set.fromList unsent, sortOn (subtract (paStart send)) unsent)
+
+  describe "data packet contents" $
+    it "round-trip with padding" $
+      property $ \start num (NonEmpty bytes) ->
+        let payload = BS.pack $ 16 : bytes
+        in decodeData (encodeData start num payload) `shouldBe` Just (start, num, payload)
+
+-- | Adds, sends, gets acknowledged, or gets a request, at some position in the
+-- buffer. Requests ask for packets close together, so they hit some.
+step :: ReliabilityState -> (Int, Int, [Word8]) -> ReliabilityState
+step rs (kind, at, bytes) = case kind `mod` 4 of
+  0 -> maybe rs snd (addSent "x" rs)
+  1 -> markSent (Time.fromSeconds 0) (position len) rs
+  2 -> fromMaybe rs (clearSentUntil (position (len + 1)) rs)
+  _ -> maybe rs fst (handleRequest (Time.fromSeconds 10) (Time.seconds 1) (BS.pack (packetIdRequest : map ((+ 1) . (`mod` 3)) bytes)) rs)
+  where
+    len = arrayLength (rsSend rs)
+    position n = paStart (rsSend rs) + fromIntegral at `mod` max 1 n

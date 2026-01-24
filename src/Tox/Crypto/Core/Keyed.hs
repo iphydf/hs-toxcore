@@ -1,7 +1,6 @@
 {-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 {-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE StrictData                 #-}
 {-# LANGUAGE TupleSections              #-}
@@ -15,13 +14,15 @@ import           Control.Monad.Random             (RandT)
 import           Control.Monad.Reader             (ReaderT)
 import           Control.Monad.RWS                (RWST)
 import           Control.Monad.State              (MonadState, StateT (..),
-                                                   evalStateT, gets, modify,
+                                                   evalStateT, gets, put,
                                                    runStateT, state)
 import           Control.Monad.Trans              (MonadTrans, lift)
 import           Control.Monad.Writer             (MonadWriter, WriterT)
 
-import           Data.Map                         (Map)
-import qualified Data.Map                         as Map
+import           Data.Map.Strict                  (Map)
+import qualified Data.Map.Strict                  as Map
+import           Data.Maybe                       (fromMaybe)
+import           Tox.Core.Log                     (MonadLog)
 import           Tox.Core.Timed                   (Timed)
 import qualified Tox.Crypto.Core.CombinedKey      as CombinedKey
 import           Tox.Crypto.Core.Key              (CombinedKey, PublicKey,
@@ -55,12 +56,26 @@ instance Monad NullKeyed where
 instance Keyed NullKeyed where
   getCombinedKey = (NullKeyed .) . CombinedKey.precompute
 
-type KeyRing = Map (SecretKey, PublicKey) CombinedKey
+-- | Combined keys in 2 generations. When the new one is full, the old one goes,
+-- so anyone sending from new keys can't make it grow without bound.
+data KeyRing = KeyRing
+  { ringNew :: Map (SecretKey, PublicKey) CombinedKey
+  , ringOld :: Map (SecretKey, PublicKey) CombinedKey
+  }
 
--- | caches computations of combined keys. Makes no attempt to delete old keys.
+emptyKeyRing :: KeyRing
+emptyKeyRing = KeyRing Map.empty Map.empty
+
+keyRingSize :: KeyRing -> Int
+keyRingSize (KeyRing new old) = Map.size new + Map.size old
+
+-- | Like c-toxcore's caches, which hold 1024 keys each.
+keyRingGeneration :: Int
+keyRingGeneration = 1024
+
 newtype KeyedT m a = KeyedT (StateT KeyRing m a)
   deriving (Monad, Applicative, Functor, MonadWriter w
-    , MonadRandomBytes, MonadTrans, MonadIO, Timed)
+    , MonadRandomBytes, MonadTrans, MonadIO, Timed, MonadLog)
 
 runKeyedT :: Monad m => KeyedT m a -> KeyRing -> m (a, KeyRing)
 runKeyedT (KeyedT m) = runStateT m
@@ -72,10 +87,17 @@ instance (MonadState s m, Applicative m) => MonadState s (KeyedT m) where
   state f = KeyedT . StateT $ \s -> (, s) <$> state f
 
 instance (Monad m, Applicative m) => Keyed (KeyedT m) where
-  getCombinedKey secretKey publicKey =
-    let keys = (secretKey, publicKey)
-    in KeyedT $ gets (Map.lookup keys) >>= \case
-      Nothing ->
-        let shared = CombinedKey.precompute secretKey publicKey
-        in modify (Map.insert keys shared) >> return shared
-      Just shared -> return shared
+  getCombinedKey secretKey publicKey = KeyedT $ do
+    (shared, ring) <- gets (combinedKey secretKey publicKey)
+    put $! ring
+    return shared
+
+-- | From the ring if it's there, else worked out and kept.
+combinedKey :: SecretKey -> PublicKey -> KeyRing -> (CombinedKey, KeyRing)
+combinedKey secretKey publicKey ring@(KeyRing new old) = maybe (shared, kept) (, ring) (Map.lookup keys new)
+  where
+    keys = (secretKey, publicKey)
+    shared = fromMaybe (CombinedKey.precompute secretKey publicKey) (Map.lookup keys old)
+    kept
+      | Map.size new >= keyRingGeneration = KeyRing (Map.singleton keys shared) new
+      | otherwise = ring { ringNew = Map.insert keys shared new }

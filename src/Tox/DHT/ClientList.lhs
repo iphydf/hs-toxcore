@@ -6,22 +6,21 @@
 module Tox.DHT.ClientList where
 
 import           Control.Monad             (join)
-import           Data.List                 (sort)
 import           Data.Map                  (Map)
 import qualified Data.Map                  as Map
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary,
                                             arbitrarySizedNatural)
-import           Test.QuickCheck.Gen       (Gen)
 import qualified Test.QuickCheck.Gen       as Gen
+import           Test.QuickCheck.Gen       (Gen)
 
 import           Tox.Core.Time             (Timestamp)
-import           Tox.Crypto.Core.Key            (PublicKey)
-import           Tox.DHT.ClientNode        (ClientNode)
+import           Tox.Crypto.Core.Key       (PublicKey)
 import qualified Tox.DHT.ClientNode        as ClientNode
-import           Tox.DHT.Distance          (Distance)
+import           Tox.DHT.ClientNode        (ClientNode)
 import qualified Tox.DHT.Distance          as Distance
-import           Tox.Network.Core.NodeInfo      (NodeInfo)
-import qualified Tox.Network.Core.NodeInfo      as NodeInfo
+import           Tox.DHT.Distance          (Distance)
+import qualified Tox.Network.Core.NodeInfo as NodeInfo
+import           Tox.Network.Core.NodeInfo (NodeInfo)
 
 
 {-------------------------------------------------------------------------------
@@ -119,8 +118,11 @@ removeNode publicKey clientList =
 
 viable :: NodeInfo -> ClientList -> Bool
 viable nodeInfo ClientList{ baseKey, maxSize, nodes } =
-  let key = Distance.xorDistance (NodeInfo.publicKey nodeInfo) baseKey
-  in (key `elem`) . take maxSize . sort $ key : Map.keys nodes
+  case Map.lookupMax nodes of
+    Nothing       -> maxSize > 0
+    Just (far, _) -> Map.size nodes < maxSize || key <= far
+  where
+    key = Distance.xorDistance (NodeInfo.publicKey nodeInfo) baseKey
 
 \end{code}
 

@@ -51,6 +51,14 @@ spec = do
       in
       unless viable $ afterAdd `shouldBe` clientList
 
+  it "a node, new or already there, is viable when adding it keeps it in the list" $
+    property $ \time nodeInfo clientList ->
+      let
+        nodes = nodeInfo : ClientList.nodeInfos clientList
+        kept n = ClientList.lookup (NodeInfo.publicKey n) (ClientList.addNode time n clientList) == Just n
+      in
+      map (`ClientList.viable` clientList) nodes `shouldBe` map kept nodes
+
   describe "addNode" $
     it "keeps the k nodes closest to the base key" $
       property $ \clientList time nodeInfo ->

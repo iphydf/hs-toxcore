@@ -7,12 +7,20 @@ the service.
 
 \begin{code}
 {-# LANGUAGE StrictData #-}
-module Tox.DHT.PendingReplies where
+module Tox.DHT.PendingReplies
+  ( PendingReplies
+  , empty
+  , size
+  , expectReply
+  , checkExpectedReply
+  , dropOlder
+  ) where
 
-import           Tox.Core.Time        (Timestamp)
-import qualified Tox.DHT.RpcPacket    as RpcPacket
-import           Tox.DHT.Stamped      (Stamped)
-import qualified Tox.DHT.Stamped      as Stamped
+import           Data.Map                  (Map)
+import qualified Data.Map.Strict           as Map
+
+import           Tox.Core.Time             (Timestamp)
+import qualified Tox.DHT.RpcPacket         as RpcPacket
 import           Tox.Network.Core.NodeInfo (NodeInfo)
 
 {-------------------------------------------------------------------------------
@@ -21,20 +29,37 @@ import           Tox.Network.Core.NodeInfo (NodeInfo)
  -
  ------------------------------------------------------------------------------}
 
-type PendingReplies = Stamped (NodeInfo, RpcPacket.RequestId)
+-- | By request ID, to find a reply among many, and by time, to drop the old
+-- ones without looking at the others.
+data PendingReplies = PendingReplies
+  { byId   :: Map RpcPacket.RequestId (NodeInfo, Timestamp)
+  , byTime :: Map Timestamp [RpcPacket.RequestId]
+  } deriving (Eq, Read, Show)
+
+empty :: PendingReplies
+empty = PendingReplies Map.empty Map.empty
+
+size :: PendingReplies -> Int
+size = Map.size . byId
 
 expectReply :: Timestamp -> NodeInfo -> RpcPacket.RequestId ->
   PendingReplies -> PendingReplies
-expectReply time node requestId = Stamped.add time (node, requestId)
+expectReply time node requestId (PendingReplies ids times) =
+  PendingReplies (Map.insert requestId (node, time) ids) (Map.insertWith (++) time [requestId] times)
 
 checkExpectedReply :: Timestamp -> NodeInfo -> RpcPacket.RequestId ->
   PendingReplies -> (Bool, PendingReplies)
-checkExpectedReply cutoff node requestId pendingReplies =
-  case filter (>= cutoff) $
-    Stamped.findStamps (== (node, requestId)) pendingReplies
-  of
-    []     -> (False, pendingReplies)
-    time:_ -> (True, Stamped.delete time (node, requestId) pendingReplies)
+checkExpectedReply cutoff node requestId pending@(PendingReplies ids times) =
+  case Map.lookup requestId ids of
+    Just (asked, time) | asked == node, time >= cutoff ->
+      (True, PendingReplies (Map.delete requestId ids) (Map.adjust (filter (/= requestId)) time times))
+    _ -> (False, pending)
+
+-- | Forgets requests sent before then.
+dropOlder :: Timestamp -> PendingReplies -> PendingReplies
+dropOlder time (PendingReplies ids times) =
+  let (old, kept) = Map.spanAntitone (< time) times
+  in PendingReplies (foldr Map.delete ids (concat old)) kept
 
 {-------------------------------------------------------------------------------
  -

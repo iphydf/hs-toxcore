@@ -152,13 +152,14 @@ Unicode Control Characters (U+240x) is not permitted without additional marker.
 \input{src/Tox/DHT.lhs}
 \input{src/Tox/Session/Connection.lhs}
 \input{src/Tox/Session/Friend.lhs}
-\input{src/Tox/Application/LegacyGroup.lhs}
+\input{src/Tox/Chat/Conference.lhs}
 \input{src/Tox/Onion/Tunnel.lhs}
 \input{src/Tox/Onion/RPC.lhs}
 \input{src/Tox/Onion/Path.lhs}
+\input{src/Tox/Onion/Operation.lhs}
 \input{src/Tox/Transport/SecureSession.lhs}
 \input{src/Tox/Transport/Reliability.lhs}
 \input{src/Tox/Transport/Stream.lhs}
-\input{src/Tox/Application/GroupChat.lhs}
-\input{src/Tox/Application/GroupChatPackets.lhs}
+\input{src/Tox/Chat/GroupChat.lhs}
+\input{src/Tox/Chat/GroupChatPackets.lhs}
 \input{src/Tox/Persistence.lhs}

@@ -1,44 +1,63 @@
 \begin{code}
-{-# LANGUAGE DeriveGeneric      #-}
-{-# LANGUAGE FlexibleContexts   #-}
-{-# LANGUAGE StrictData         #-}
-{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE ConstraintKinds     #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE StrictData          #-}
 
 module Tox.Transport.SecureSession where
 
-import           Control.Monad.State            (MonadState, get, gets, modify)
-import           Data.Binary               (Binary)
-import qualified Data.Binary               as Binary
-import qualified Data.Binary.Get           as Get
-import qualified Data.Binary.Put           as Put
-import qualified Data.ByteString           as BS
-import qualified Data.ByteString.Lazy      as LBS
-import           Data.Word                 (Word64, Word16)
-import           Data.Int                  (Int16)
-import           GHC.Generics              (Generic)
+import           Control.Monad                      (guard, unless, when)
+import           Control.Monad.State                (MonadState, execStateT,
+                                                     get, gets, modify,
+                                                     runStateT)
+import           Control.Monad.Validate             (runValidate)
+import qualified Crypto.Saltine.Class               as Sodium
+import           Data.Binary                        (Binary)
+import qualified Data.Binary                        as Binary
+import qualified Data.Binary.Get                    as Get
+import qualified Data.Binary.Put                    as Put
+import           Data.ByteString                    (ByteString)
+import qualified Data.ByteString                    as BS
+import qualified Data.ByteString.Lazy               as LBS
+import           Data.Foldable                      (forM_)
+import           Data.List.NonEmpty                 (nonEmpty)
+import           Data.Maybe                         (catMaybes, fromMaybe,
+                                                     isJust)
+import qualified Data.Set                           as Set
+import           Data.Text                          (pack)
+import           Data.Word                          (Word16, Word32, Word64,
+                                                     Word8)
+import           GHC.Generics                       (Generic)
+import qualified System.Clock                       as Clock
 
-import           Tox.Crypto.Core.Key            (PublicKey, Nonce, CombinedKey, Key(..), unKey)
-import           Tox.Crypto.Core.KeyPair        (KeyPair(..))
-import qualified Tox.Crypto.Core.KeyPair        as KeyPair
-import           Tox.Crypto.Core.Box            (CipherText)
-import qualified Tox.Crypto.Core.Box            as Box
-import qualified Tox.Crypto.Core.Nonce          as Nonce
-import qualified Tox.Crypto.Core.Hash           as Hash
-import           Tox.Crypto.Core.Keyed          (Keyed(..))
-import           Tox.Core.Time                  (Timestamp(..), timestampToMicroseconds)
-import qualified Tox.Core.Time                  as Time
-import           Tox.Core.Timed                 (Timed(..))
-import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes (..), randomNonce, randomWord64)
-import qualified Tox.Network.Core.PacketKind       as PacketKind
-import           Tox.Network.Core.Packet           (Packet (..))
-import           Tox.Network.Core.NodeInfo         (NodeInfo(..))
-import qualified Tox.Network.Core.NodeInfo         as NodeInfo
-import           Tox.Network.Core.Networked        (Networked (..))
-import           Tox.Network.Core.TransportProtocol (TransportProtocol(UDP))
-
-import qualified System.Clock                  as Clock
-import qualified Crypto.Saltine.Class          as Sodium
+import           Tox.Core.Log                       (MonadLog, logDebug,
+                                                     logInfo, logWarn)
+import qualified Tox.Core.Time                      as Time
+import           Tox.Core.Time                      (TimeDiff, Timestamp (..))
+import           Tox.Core.Timed                     (Timed (..))
+import qualified Tox.Crypto.Core.Box                as Box
+import           Tox.Crypto.Core.Box                (CipherText, PlainText (..))
+import qualified Tox.Crypto.Core.Hash               as Hash
+import           Tox.Crypto.Core.Key                (CombinedKey, Nonce,
+                                                     PublicKey, SecretKey)
+import           Tox.Crypto.Core.Keyed              (Keyed (..))
+import qualified Tox.Crypto.Core.KeyPair            as KeyPair
+import           Tox.Crypto.Core.KeyPair            (KeyPair (..))
+import           Tox.Crypto.Core.MonadRandomBytes   (MonadRandomBytes (..),
+                                                     randomNonce, randomWord64)
+import qualified Tox.Crypto.Core.Noise              as Noise
+import qualified Tox.Crypto.Core.Nonce              as Nonce
+import           Tox.Network.Core.Networked         (Networked (..))
+import qualified Tox.Network.Core.NodeInfo          as NodeInfo
+import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
+import           Tox.Network.Core.Packet            (Packet (..),
+                                                     RawPayload (..))
+import qualified Tox.Network.Core.PacketKind        as PacketKind
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
+import qualified Tox.Transport.Reliability          as Reliability
+import qualified Tox.Transport.Stream               as Stream
 \end{code}
 
 \chapter{Net crypto}
@@ -241,11 +260,15 @@ instance Binary Cookie where
   put c = do
     Binary.put $ cookieNonce c
     Binary.put $ cookieEncryptedPayload c
-  get = Cookie <$> Binary.get <*> Binary.get
+  get = do
+    nonce <- Binary.get
+    -- Cookie payload is 88 bytes (72 bytes payload, 16 bytes MAC).
+    payload <- Get.getByteString (cookieLength - 24) >>= Box.cipherText
+    return $ Cookie nonce payload
 
 -- | Inner payload of a Cookie.
 data CookieInner = CookieInner
-  { ciTime        :: Word64
+  { ciTime         :: Word64
   , ciSenderRealPk :: PublicKey
   , ciSenderDhtPk  :: PublicKey
   } deriving (Eq, Show, Generic)
@@ -301,8 +324,8 @@ Handshake packet:
 \begin{code}
 -- | Handshake Packet (0x1a / 26).
 data Handshake = Handshake
-  { hCookie          :: Cookie
-  , hNonce           :: Nonce
+  { hCookie           :: Cookie
+  , hNonce            :: Nonce
   , hEncryptedMessage :: CipherText -- ^ Decrypts to hInnerMessage
   } deriving (Eq, Show, Generic)
 
@@ -311,7 +334,11 @@ instance Binary Handshake where
     Binary.put $ hCookie h
     Binary.put $ hNonce h
     Binary.put $ hEncryptedMessage h
-  get = Handshake <$> Binary.get <*> Binary.get <*> Binary.get
+  get = do
+    cookie <- Binary.get
+    nonce <- Binary.get
+    payload <- Get.getRemainingLazyByteString >>= Box.cipherText . LBS.toStrict
+    return $ Handshake cookie nonce payload
 
 -- | Inner message of a Handshake.
 data HandshakeInner = HandshakeInner
@@ -454,6 +481,98 @@ requirements:
 Due to how it is designed only one connection is possible at a time between 2
 peers.
 
+\section{Noise IK handshake}
+
+A peer may instead use the IK pattern of the Noise protocol framework
+(\url{https://noiseprotocol.org/noise.html}, revision 34), instantiated as
+\texttt{Noise\_IK\_25519\_ChaChaPoly\_BLAKE2b}, with packet id 28.  The static
+keys are the peers' long term keys.  Cookie requests and responses are the same
+as for the handshake above.  The peer that got a cookie sends the first message
+(\texttt{-> e, es, s, ss}) and the other peer answers with the second
+(\texttt{<- e, ee, se}).
+
+Initiator packet (322 bytes):
+
+\begin{tabular}{l|l}
+  Length             & Contents \\
+  \hline
+  \texttt{1}         & \texttt{uint8\_t} (0x1c) \\
+  \texttt{1}         & \texttt{uint8\_t} Noise version (1) \\
+  \texttt{112}       & Cookie from the responder \\
+  \texttt{32}        & Ephemeral public key \\
+  \texttt{48}        & Encrypted static public key \\
+  \texttt{128}       & Encrypted payload: a cookie for the responder to send back \\
+\end{tabular}
+
+Responder packet (162 bytes):
+
+\begin{tabular}{l|l}
+  Length             & Contents \\
+  \hline
+  \texttt{1}         & \texttt{uint8\_t} (0x1c) \\
+  \texttt{1}         & \texttt{uint8\_t} Noise version (1) \\
+  \texttt{32}        & Ephemeral public key \\
+  \texttt{128}       & Encrypted payload: the cookie from the initiator's payload \\
+\end{tabular}
+
+The prologue is the version and the cookie of the initiator packet, so the
+responder can check its cookie before any X25519.  Every key that MixKey makes
+encrypts only once, so the ChaChaPoly nonce is always 0.  The responder accepts
+the initiator packet only if the decrypted static key is the long term key in
+its cookie.  The initiator accepts the answer only if the cookie it gets back is
+its own, unexpired, and made for the responder's long term key.  As for the
+handshake above, the DHT public key of the peer is the one in the cookie.
+
+After the second message both peers run Split.  The initiator sends with the
+first key and the responder with the second.  Data packets are encrypted with
+XChaCha20-Poly1305, these keys, no associated data, and a nonce that starts at
+0 in both directions.  The 2 bytes of the nonce in each packet and the way the
+receiver finds the full nonce are as above.
+
+If both peers send an initiator packet, the one whose long term public key is
+greater (compared as bytes) stays the initiator and the other answers.  A peer
+that supports both handshakes answers a legacy handshake with one, so an older
+peer can still connect, though only the older peer can start such a connection.
+Older peers ignore packet id 28.
+
+\begin{code}
+noiseVersion :: Word8
+noiseVersion = 1
+
+-- | Noise Handshake Packet (0x1c / 28) from the initiator: @-> e, es, s, ss@.
+data NoiseInitiation = NoiseInitiation
+  { nInitVersion   :: Word8
+  , nInitCookie    :: Cookie
+  , nInitEphemeral :: PublicKey
+  , nInitStatic    :: BS.ByteString -- ^ 48 bytes
+  , nInitPayload   :: BS.ByteString -- ^ 128 bytes
+  } deriving (Eq, Show, Generic)
+
+instance Binary NoiseInitiation where
+  put n = do
+    Put.putWord8 $ nInitVersion n
+    Binary.put $ nInitCookie n
+    Binary.put $ nInitEphemeral n
+    Put.putByteString $ nInitStatic n
+    Put.putByteString $ nInitPayload n
+  get = NoiseInitiation <$> Get.getWord8 <*> Binary.get <*> Binary.get
+    <*> Get.getByteString (32 + 16) <*> Get.getByteString (cookieLength + 16)
+
+-- | Noise Handshake Packet (0x1c / 28) from the responder: @<- e, ee, se@.
+data NoiseResponse = NoiseResponse
+  { nRespVersion   :: Word8
+  , nRespEphemeral :: PublicKey
+  , nRespPayload   :: BS.ByteString -- ^ 128 bytes
+  } deriving (Eq, Show, Generic)
+
+instance Binary NoiseResponse where
+  put n = do
+    Put.putWord8 $ nRespVersion n
+    Binary.put $ nRespEphemeral n
+    Put.putByteString $ nRespPayload n
+  get = NoiseResponse <$> Get.getWord8 <*> Binary.get <*> Get.getByteString (cookieLength + 16)
+\end{code}
+
 Encrypted packets:
 
 \begin{tabular}{l|l}
@@ -526,315 +645,6 @@ Toxcore uses the following method to calculate the nonce for each packet:
     \end{itemize}
 \end{enumerate}
 
-\begin{code}
-{-------------------------------------------------------------------------------
- -
- - :: State Definitions.
- -
- ------------------------------------------------------------------------------}
-
-data HandshakeStatus
-  = SessionCookieSent Word64 -- ^ Echo ID
-  | SessionHandshakeSent Cookie
-  | SessionHandshakeAccepted Cookie -- ^ Received handshake from peer
-  | SessionConfirmed -- ^ Received data packet, session established
-  deriving (Eq, Show, Generic)
-
-data SecureSessionState = SecureSessionState
-  { ssOurRealKeyPair      :: KeyPair
-  , ssPeerRealPk          :: PublicKey
-  , ssOurDhtKeyPair       :: KeyPair
-  , ssPeerDhtPk           :: PublicKey
-  , ssPeerNodeInfo        :: NodeInfo
-  , ssStatus              :: Maybe HandshakeStatus
-  , ssOurSessionKeyPair   :: KeyPair
-  , ssPeerSessionPk       :: Maybe PublicKey
-  , ssSharedKey           :: Maybe CombinedKey
-  , ssOurBaseNonce        :: Nonce
-  , ssPeerBaseNonce       :: Maybe Nonce
-  , ssSentPackets         :: Word64
-  , ssRecvPackets         :: Word64
-  , ssLastAttempt         :: Maybe Timestamp
-  , ssRetryCount          :: Int
-  } deriving (Eq, Show, Generic)
-
-
-{-------------------------------------------------------------------------------
- -
- - :: Cookie Logic.
- -
- ------------------------------------------------------------------------------}
-
--- | Create a Cookie for a peer.
-createCookie :: MonadRandomBytes m => CombinedKey -> Word64 -> PublicKey -> PublicKey -> m Cookie
-createCookie cookieKey time peerRealPk peerDhtPk = do
-  nonce <- randomNonce
-  let inner = CookieInner time peerRealPk peerDhtPk
-      plain = Box.encode inner
-      encrypted = Box.encrypt cookieKey nonce plain
-  return $ Cookie nonce encrypted
-
--- | Decrypt and validate a Cookie.
-decryptCookie :: CombinedKey -> Cookie -> Maybe CookieInner
-decryptCookie cookieKey (Cookie nonce encrypted) =
-  Box.decrypt cookieKey nonce encrypted >>= Box.decode
-
-
-{-------------------------------------------------------------------------------
- -
- - :: CryptoData Packet Logic.
- -
- ------------------------------------------------------------------------------}
-
--- | Threshold for base nonce rotation (1/3 of 65536).
-dataNumThreshold :: Word16
-dataNumThreshold = 21845
-
--- | Calculate the full nonce for a received packet.
-calculateNonce :: Nonce -> Word16 -> Nonce
-calculateNonce baseNonce shortNonce =
-  let
-    n = Nonce.nonceToInteger baseNonce
-    baseShort = fromIntegral (n `mod` 65536)
-    diff = shortNonce - baseShort
-    -- treat diff as signed 16-bit to handle wrap around
-    n' = n + fromIntegral (fromIntegral diff :: Int16)
-  in
-    Nonce.integerToNonce n'
-
--- | Update the base nonce after successful decryption if necessary.
-updateBaseNonce :: Nonce -> Word16 -> Nonce
-updateBaseNonce baseNonce shortNonce =
-  let
-    n = Nonce.nonceToInteger baseNonce
-    baseShort = fromIntegral (n `mod` 65536)
-    diff = shortNonce - baseShort
-  in
-    if diff > dataNumThreshold * 2
-    then Nonce.integerToNonce (n + fromIntegral dataNumThreshold)
-    else baseNonce
-
-
-{-------------------------------------------------------------------------------
- -
- - :: Cryptographic Helpers.
- -
- ------------------------------------------------------------------------------}
-
-getDhtSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
-getDhtSharedKey ss = getCombinedKey (KeyPair.secretKey $ ssOurDhtKeyPair ss) (ssPeerDhtPk ss)
-
-getRealSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
-getRealSharedKey ss = getCombinedKey (KeyPair.secretKey $ ssOurRealKeyPair ss) (ssPeerRealPk ss)
-
-getSessionSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
-getSessionSharedKey ss = case ssPeerSessionPk ss of
-  Nothing -> error "getSessionSharedKey: peer session pk not set"
-  Just pk -> getCombinedKey (KeyPair.secretKey $ ssOurSessionKeyPair ss) pk
-
-
-{-------------------------------------------------------------------------------
- -
- - :: Session Handlers.
- -
- ------------------------------------------------------------------------------}
-
--- | Initial state for a new session.
--- | Initial state for a new session.
-initSession :: MonadRandomBytes m => KeyPair -> PublicKey -> KeyPair -> PublicKey -> NodeInfo -> m SecureSessionState
-initSession ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
-  ourSessionKp <- newKeyPair
-  ourBaseNonce <- randomNonce
-  return SecureSessionState
-    { ssOurRealKeyPair    = ourRealKp
-    , ssPeerRealPk        = peerRealPk
-    , ssOurDhtKeyPair     = ourDhtKp
-    , ssPeerDhtPk         = peerDhtPk
-    , ssPeerNodeInfo      = peerNode
-    , ssStatus            = Nothing
-    , ssOurSessionKeyPair = ourSessionKp
-    , ssPeerSessionPk     = Nothing
-    , ssSharedKey         = Nothing
-    , ssOurBaseNonce      = ourBaseNonce
-    , ssPeerBaseNonce     = Nothing
-    , ssSentPackets       = 0
-    , ssRecvPackets       = 0
-    , ssLastAttempt       = Nothing
-    , ssRetryCount        = 0
-    }
-
-sendCookieRequest :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-                  => m ()
-sendCookieRequest = do
-  ss <- get
-  nonce <- randomNonce
-  echoId <- randomWord64
-  dhtSharedKey <- getDhtSharedKey ss
-
-  let cri = CookieRequestInner (KeyPair.publicKey $ ssOurRealKeyPair ss) (BS.replicate 32 0) echoId
-      plain = Box.encode cri
-      encrypted = Box.encrypt dhtSharedKey nonce plain
-      cr = CookieRequest (KeyPair.publicKey $ ssOurDhtKeyPair ss) nonce encrypted
-      pkt = Packet PacketKind.CookieRequest (LBS.toStrict $ Binary.encode cr)
-
-  sendPacket (ssPeerNodeInfo ss) pkt
-  modify $ \s -> s { ssStatus = Just (SessionCookieSent echoId) }
-
--- | Handle an incoming packet for this session.
-handlePacket :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadState SecureSessionState m)
-             => CombinedKey -> NodeInfo -> Packet BS.ByteString -> m ()
-handlePacket ck from (Packet kind payload) = case kind of
-  PacketKind.CookieResponse -> handleCookieResponse from payload
-  PacketKind.CryptoHandshake -> handleHandshake ck from payload
-  PacketKind.CryptoData -> handleCryptoData from payload
-  _ -> return ()
-
--- | Handle a CookieRequest (Server side).
-handleCookieRequest :: (Timed m, MonadRandomBytes m, Keyed m, Networked m)
-                    => CombinedKey -> KeyPair -> NodeInfo -> BS.ByteString -> m ()
-handleCookieRequest cookieKey ourDhtKp from payload = do
-  case Box.decode (Box.PlainText payload) of
-    Nothing -> return ()
-    Just (cr :: CookieRequest) -> do
-      now <- askTime
-      let timeInt = timestampToMicroseconds now
-
-      sharedKey <- getCombinedKey (KeyPair.secretKey ourDhtKp) (crSenderDhtPk cr)
-      case Box.decrypt sharedKey (crNonce cr) (crEncryptedMessage cr) of
-        Nothing -> return ()
-        Just plain -> case Box.decode plain of
-          Nothing -> return ()
-          Just (cri :: CookieRequestInner) -> do
-            cookie <- createCookie cookieKey timeInt (criSenderRealPk cri) (crSenderDhtPk cr)
-            nonce <- randomNonce
-
-            let rsi = CookieResponseInner cookie (criEchoId cri)
-                plainR = Box.encode rsi
-                encryptedR = Box.encrypt sharedKey nonce plainR
-                rs = CookieResponse nonce encryptedR
-                pkt = Packet PacketKind.CookieResponse (LBS.toStrict $ Binary.encode rs)
-
-            sendPacket from pkt
-
-handleCookieResponse :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-                     => NodeInfo -> BS.ByteString -> m ()
-handleCookieResponse _from payload = do
-  ss <- get
-  case Box.decode (Box.PlainText payload) of
-    Nothing -> return ()
-    Just (rs :: CookieResponse) -> do
-      sharedKey <- getDhtSharedKey ss
-      case Box.decrypt sharedKey (rsNonce rs) (rsEncryptedMessage rs) of
-        Nothing -> return ()
-        Just plain -> case Box.decode plain of
-          Nothing -> return ()
-          Just (rsi :: CookieResponseInner) -> do
-            case ssStatus ss of
-              Just (SessionCookieSent echoId) | echoId == rsiEchoId rsi -> do
-                modify $ \s -> s { ssStatus = Just (SessionHandshakeSent (rsiCookie rsi)) }
-                sendHandshake (rsiCookie rsi)
-              _ -> return ()
-
-sendHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-              => Cookie -> m ()
-sendHandshake cookie = do
-  ss <- get
-  nonce <- randomNonce
-  realSharedKey <- getRealSharedKey ss
-
-  let cookieBytes = LBS.toStrict $ Binary.encode cookie
-      cookieHash = Hash.hash cookieBytes
-      hi = HandshakeInner (ssOurBaseNonce ss) (KeyPair.publicKey $ ssOurSessionKeyPair ss) cookieHash cookie -- FIXME: hiOtherCookie
-      plain = Box.encode hi
-      encrypted = Box.encrypt realSharedKey nonce plain
-      h = Handshake cookie nonce encrypted
-      pkt = Packet PacketKind.CryptoHandshake (LBS.toStrict $ Binary.encode h)
-
-  sendPacket (ssPeerNodeInfo ss) pkt
-
-handleHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-                => CombinedKey -> NodeInfo -> BS.ByteString -> m ()
-handleHandshake cookieK from payload = do
-  ss <- get
-  case Box.decode (Box.PlainText payload) of
-    Nothing -> return ()
-    Just (h :: Handshake) -> do
-      -- 1. Validate our Cookie
-      now <- askTime
-      case decryptCookie cookieK (hCookie h) of
-        Nothing -> return () -- Not our cookie
-        Just ci -> do
-          let ciTimestamp = Timestamp $ Clock.TimeSpec (fromIntegral $ ciTime ci `div` 1000000) (fromIntegral $ (ciTime ci `mod` 1000000) * 1000)
-              age = now `Time.diffTime` ciTimestamp
-
-          if age > Time.seconds 15
-          then return () -- Expired
-          else do
-            -- 2. Decrypt Handshake
-            realSharedKey <- getRealSharedKey ss
-            case Box.decrypt realSharedKey (hNonce h) (hEncryptedMessage h) of
-              Nothing -> return ()
-              Just plain -> case Box.decode plain of
-                Nothing -> return ()
-                Just (hi :: HandshakeInner) -> do
-                  -- Mobility: update peer address if it changed
-                  modify $ \s -> s { ssPeerNodeInfo = from }
-
-                  sharedKey <- getCombinedKey (KeyPair.secretKey $ ssOurSessionKeyPair ss) (hiSessionPk hi)
-
-                  modify $ \s -> s
-                    { ssPeerSessionPk = Just (hiSessionPk hi)
-                    , ssPeerBaseNonce = Just (hiBaseNonce hi)
-                    , ssSharedKey     = Just sharedKey
-                    , ssStatus        = Just (SessionHandshakeAccepted (hCookie h))
-                    }
-
-                  case ssStatus ss of
-                    Just (SessionHandshakeSent _) -> sendHandshake (hiOtherCookie hi)
-                    _ -> return ()
-
-sendCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-               => Box.PlainText -> m ()
-sendCryptoData plain = do
-  ss <- get
-  case (ssSharedKey ss, ssPeerBaseNonce ss) of
-    (Just sharedKey, Just _) -> do
-      let n = ssOurBaseNonce ss
-          nonceInt = Nonce.nonceToInteger n
-          fullNonce = Nonce.integerToNonce (nonceInt + toInteger (ssSentPackets ss))
-          shortNonce = fromIntegral (Nonce.nonceToInteger fullNonce `mod` 65536)
-          encrypted = Box.encrypt sharedKey fullNonce plain
-          cd = CryptoDataPacket shortNonce encrypted
-          pkt = Packet PacketKind.CryptoData (LBS.toStrict $ Binary.encode cd)
-
-      sendPacket (ssPeerNodeInfo ss) pkt
-      modify $ \s -> s { ssSentPackets = ssSentPackets s + 1 }
-    _ -> return ()
-
-handleCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-                 => NodeInfo -> BS.ByteString -> m ()
-handleCryptoData from payload = do
-  ss <- get
-  case (ssSharedKey ss, ssPeerBaseNonce ss) of
-    (Just sharedKey, Just peerBaseNonce) -> do
-      case Box.decode (Box.PlainText payload) of
-        Nothing -> return ()
-        Just (cd :: CryptoDataPacket) -> do
-          let nonce = calculateNonce peerBaseNonce (cdNonceShort cd)
-          case Box.decrypt sharedKey nonce (cdPayload cd) of
-            Nothing -> return ()
-            Just _plain -> do
-              modify $ \s -> s
-                { ssStatus = Just SessionConfirmed
-                , ssRecvPackets = ssRecvPackets s + 1
-                , ssPeerBaseNonce = Just (updateBaseNonce peerBaseNonce (cdNonceShort cd))
-                , ssPeerNodeInfo = from -- Update for mobility
-                }
-              -- TODO: pass plain upwards
-              return ()
-    _ -> return ()
-\end{code}
-
 First it takes the difference between the 2 byte number on the packet and the
 last.  Because the 3 values are unsigned 16 bit ints and rollover is part of
 the math something like diff = (10 - 65536) means diff is equal to 11.
@@ -857,3 +667,905 @@ packets is the same for received and sent packets there must be a cryptographic
 way to make it impossible for someone to do an attack where they would replay
 packets back to the sender and the sender would think that those packets came
 from the other peer.
+
+\begin{code}
+{-------------------------------------------------------------------------------
+ -
+ - :: Constants.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Payload lengths of the handshake packets, without the packet kind.
+cookieRequestLength, cookieResponseLength, handshakeLength :: Int
+cookieRequestLength  = 32 + 24 + 32 + 32 + 8 + 16
+cookieResponseLength = 24 + cookieLength + 8 + 16
+handshakeLength      = cookieLength + 24 + 24 + 32 + 64 + cookieLength + 16
+
+noiseInitiationLength, noiseResponseLength :: Int
+noiseInitiationLength = 1 + cookieLength + 32 + 32 + 16 + cookieLength + 16
+noiseResponseLength   = 1 + 32 + cookieLength + 16
+
+cookieLength :: Int
+cookieLength = 24 + 8 + 32 + 32 + 16
+
+-- | Seconds a cookie stays valid.
+cookieTimeout :: Word64
+cookieTimeout = 15
+
+packetIdKill :: Word8
+packetIdKill = 2
+
+isLossless, isLossy :: Word8 -> Bool
+isLossless ident = ident >= 16 && ident <= 191
+isLossy ident = ident >= 192 && ident <= 254
+
+-- | For resending the cookie request or handshake, and sending request
+-- packets.
+sendPacketInterval :: TimeDiff
+sendPacketInterval = Time.seconds 1
+
+-- | Cookie request or handshake tries before we give up.
+maxSendTries :: Int
+maxSendTries = 8
+
+-- | Don't resend requested packets sent less than a round trip ago. These
+-- are the round trips toxcore assumes over UDP (until it measures one) and
+-- over TCP.
+resendDelay, tcpResendDelay :: TimeDiff
+resendDelay    = Time.seconds 1
+tcpResendDelay = Time.milliseconds 500
+
+-- | While we heard the friend over UDP this recently, packets over TCP don't
+-- move the session (toxcore sends a lot both ways).
+udpDirectTimeout :: TimeDiff
+udpDirectTimeout = Time.seconds 8
+
+-- | toxcore also moves us off UDP when it hears nothing from us there for
+-- 'udpDirectTimeout', counted in whole seconds. Two can be lost in a row with
+-- a second to spare.
+keepaliveInterval :: TimeDiff
+keepaliveInterval = Time.seconds 2
+
+-- | Threshold for base nonce rotation (1/3 of 65536).
+dataNumThreshold :: Word16
+dataNumThreshold = 21845
+
+-- | How often we measure the receive rate, and the rate below which request
+-- packets go at 'sendPacketInterval'.
+packetCounterInterval :: TimeDiff
+packetCounterInterval = Stream.sampleInterval
+
+minPacketRate :: Double
+minPacketRate = Stream.minRate
+
+-- | toxcore's REQUEST_PACKETS_COMPARE_CONSTANT.
+requestCompareConstant :: Double
+requestCompareConstant = 12.5
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: State Definitions.
+ -
+ ------------------------------------------------------------------------------}
+
+data SessionStatus
+  = CookieRequesting Word64 -- ^ Echo ID of our cookie request.
+  | HandshakeSent
+  | NotConfirmed            -- ^ Handshakes exchanged, no data packet yet.
+  | Established
+  deriving (Eq, Show)
+
+-- | Which handshakes we make and accept.
+data HandshakeMode
+  = NoiseAndLegacy -- ^ Noise, and legacy with peers that only have that.
+  | NoiseOnly
+  | LegacyOnly
+  deriving (Eq, Show, Read, Enum, Bounded)
+
+-- | How data packets are encrypted.
+data TransportCipher
+  = LegacyCipher CombinedKey
+  | NoiseCipher Noise.CipherKey Noise.CipherKey -- ^ Our sending key, then the peer's.
+  deriving (Eq, Show)
+
+-- | Keys from the peer's handshake.
+data SessionKeys = SessionKeys
+  { skCipher    :: TransportCipher
+  , skRecvNonce :: Nonce -- ^ Peer's base nonce, advanced as packets arrive.
+  } deriving (Eq, Show)
+
+-- | Our side of a Noise handshake we started, until the response.
+data NoiseInitiator = NoiseInitiator
+  { niEphemeral :: KeyPair
+  , niSymmetric :: Noise.Symmetric
+  } deriving (Eq, Show)
+
+data SessionEvent
+  = SessionEstablished
+  | SessionKilled -- ^ The peer said so.
+  | SessionGaveUp -- ^ The peer never finished the handshake.
+  | SessionLosslessData ByteString
+  | SessionLossyData ByteString
+  | SessionDhtPkChanged PublicKey
+  | SessionMoved -- ^ Between UDP and a relay.
+  | SessionRoom -- ^ The peer acknowledged packets, or our send budget grew.
+  deriving (Eq, Show)
+
+data SecureSessionState = SecureSessionState
+  { ssOurRealKeyPair    :: KeyPair
+  , ssPeerRealPk        :: PublicKey
+  , ssOurDhtKeyPair     :: KeyPair
+  , ssPeerDhtPk         :: PublicKey
+  , ssPeerNodeInfo      :: NodeInfo
+  , ssStatus            :: SessionStatus
+  , ssMode              :: HandshakeMode
+  , ssNoise             :: Bool -- ^ False with 'LegacyOnly' or after falling back to the legacy handshake.
+  , ssNoiseInitiator    :: Maybe NoiseInitiator
+  , ssOurSessionKeyPair :: KeyPair
+  , ssKeys              :: Maybe SessionKeys
+  , ssSentNonce         :: Nonce -- ^ Nonce for our next data packet.
+  , ssTempPacket        :: Maybe (Packet RawPayload) -- ^ Cookie request or handshake.
+  , ssTempSent          :: Int
+  , ssTempLastSent      :: Maybe Timestamp
+  , ssLastRequestSent   :: Maybe Timestamp
+  , ssPacketCounter     :: Int             -- ^ Lossless packets since 'ssCounterSince'.
+  , ssCounterSince      :: Maybe Timestamp -- ^ 'Nothing' while it rests.
+  , ssRecvRate          :: Double          -- ^ Lossless packets per second.
+  , ssReliability       :: Reliability.ReliabilityState
+  , ssRtt               :: TimeDiff        -- ^ Shortest round trip seen.
+  , ssCongestion        :: Stream.Congestion
+  , ssLastTcpSent       :: Maybe Timestamp
+  , ssLastUdpSent       :: Maybe Timestamp
+  , ssLastUdpRecv       :: Maybe Timestamp
+  , ssAckSent           :: Word32          -- ^ The receive buffer start we last told the peer.
+  } deriving (Eq, Show)
+
+type SessionMonad m =
+  (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLog m)
+
+data OpenedHandshake = OpenedHandshake
+  { ohPeerRealPk  :: PublicKey
+  , ohPeerDhtPk   :: PublicKey
+  , ohBaseNonce   :: Nonce
+  , ohSessionPk   :: PublicKey
+  , ohOtherCookie :: Cookie
+  } deriving (Eq, Show)
+
+-- | A valid Noise initiator packet, before we answer it.
+data OpenedNoise = OpenedNoise
+  { onPeerRealPk    :: PublicKey
+  , onPeerDhtPk     :: PublicKey
+  , onPeerEphemeral :: PublicKey
+  , onOtherCookie   :: Cookie
+  , onSymmetric     :: Noise.Symmetric
+  } deriving (Eq, Show)
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Cookie Logic.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | In seconds. Any clock works, as only we read our cookies.
+cookieTime :: Timestamp -> Word64
+cookieTime (Timestamp t) = fromIntegral $ Clock.sec t
+
+createCookie :: MonadRandomBytes m => CombinedKey -> Word64 -> PublicKey -> PublicKey -> m Cookie
+createCookie cookieKey time peerRealPk peerDhtPk = do
+  nonce <- randomNonce
+  let inner = CookieInner time peerRealPk peerDhtPk
+      plain = Box.encode inner
+      encrypted = Box.encrypt cookieKey nonce plain
+  return $ Cookie nonce encrypted
+
+decryptCookie :: CombinedKey -> Cookie -> Maybe CookieInner
+decryptCookie cookieKey (Cookie nonce encrypted) =
+  Box.decrypt cookieKey nonce encrypted >>= Box.decode
+
+-- | Nothing if it expired.
+openCookie :: CombinedKey -> Timestamp -> Cookie -> Maybe CookieInner
+openCookie cookieKey now cookie = do
+  ci <- decryptCookie cookieKey cookie
+  guard $ ciTime ci + cookieTimeout >= cookieTime now && cookieTime now >= ciTime ci
+  return ci
+
+cookieHash :: Cookie -> ByteString
+cookieHash = Hash.hash . LBS.toStrict . Binary.encode
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Packet Helpers.
+ -
+ ------------------------------------------------------------------------------}
+
+rawPacket :: Binary a => PacketKind.PacketKind -> a -> Packet RawPayload
+rawPacket kind = Packet kind . RawPayload . LBS.toStrict . Binary.encode
+
+decodeExact :: Binary a => Int -> ByteString -> Maybe a
+decodeExact len payload = do
+  guard $ BS.length payload == len
+  Box.decode $ PlainText payload
+
+nonceShort :: Nonce -> Word16
+nonceShort n = fromIntegral $ Nonce.nonceToInteger n `mod` 65536
+
+addNonce :: Integral a => Nonce -> a -> Nonce
+addNonce n k = Nonce.integerToNonce $ Nonce.nonceToInteger n + toInteger k
+
+-- | Nonce the data packet was encrypted with, and the peer's base nonce to
+-- keep if it decrypts.
+packetNonce :: Nonce -> Word16 -> (Nonce, Nonce)
+packetNonce base short =
+  ( addNonce base diff
+  , if diff > dataNumThreshold * 2 then addNonce base dataNumThreshold else base
+  )
+  where
+    diff = short - nonceShort base
+
+getDhtSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
+getDhtSharedKey ss = getCombinedKey (KeyPair.secretKey $ ssOurDhtKeyPair ss) (ssPeerDhtPk ss)
+
+getRealSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
+getRealSharedKey ss = getCombinedKey (KeyPair.secretKey $ ssOurRealKeyPair ss) (ssPeerRealPk ss)
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Session Creation.
+ -
+ ------------------------------------------------------------------------------}
+
+newSessionState :: MonadRandomBytes m
+                => HandshakeMode -> KeyPair -> PublicKey -> KeyPair -> PublicKey -> NodeInfo -> SessionStatus -> m SecureSessionState
+newSessionState mode ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode status = do
+  ourSessionKp <- newKeyPair
+  sentNonce <- randomNonce
+  return SecureSessionState
+    { ssOurRealKeyPair    = ourRealKp
+    , ssPeerRealPk        = peerRealPk
+    , ssOurDhtKeyPair     = ourDhtKp
+    , ssPeerDhtPk         = peerDhtPk
+    , ssPeerNodeInfo      = peerNode
+    , ssStatus            = status
+    , ssMode              = mode
+    , ssNoise             = mode /= LegacyOnly
+    , ssNoiseInitiator    = Nothing
+    , ssOurSessionKeyPair = ourSessionKp
+    , ssKeys              = Nothing
+    , ssSentNonce         = sentNonce
+    , ssTempPacket        = Nothing
+    , ssTempSent          = 0
+    , ssTempLastSent      = Nothing
+    , ssLastRequestSent   = Nothing
+    , ssPacketCounter     = 0
+    , ssCounterSince      = Nothing
+    , ssRecvRate          = 0
+    , ssReliability       = Reliability.initState
+    , ssRtt               = resendDelay
+    , ssCongestion        = Stream.initState
+    , ssLastTcpSent       = Nothing
+    , ssLastUdpSent       = Nothing
+    , ssLastUdpRecv       = Nothing
+    , ssAckSent           = 0
+    }
+
+-- | 'maintainSession' sends the cookie request.
+initSession :: (MonadRandomBytes m, Keyed m)
+            => HandshakeMode -> KeyPair -> PublicKey -> KeyPair -> PublicKey -> NodeInfo -> m SecureSessionState
+initSession mode ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
+  echoId <- randomWord64
+  ss <- newSessionState mode ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode (CookieRequesting echoId)
+  nonce <- randomNonce
+  dhtSharedKey <- getDhtSharedKey ss
+  let cri = CookieRequestInner (KeyPair.publicKey ourRealKp) (BS.replicate 32 0) echoId
+      cr = CookieRequest (KeyPair.publicKey ourDhtKp) nonce (Box.encrypt dhtSharedKey nonce (Box.encode cri))
+  return ss { ssTempPacket = Just $ rawPacket PacketKind.CookieRequest cr }
+
+-- | The peer started it with a handshake we validated. Answers with ours.
+acceptSession :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLog m)
+              => HandshakeMode -> CombinedKey -> KeyPair -> KeyPair -> NodeInfo -> OpenedHandshake -> m SecureSessionState
+acceptSession mode cookieKey ourRealKp ourDhtKp from oh = do
+  ss <- newSessionState mode ourRealKp (ohPeerRealPk oh) ourDhtKp (ohPeerDhtPk oh) from NotConfirmed
+  sharedKey <- getCombinedKey (KeyPair.secretKey $ ssOurSessionKeyPair ss) (ohSessionPk oh)
+  flip execStateT ss { ssNoise = False, ssKeys = Just $ SessionKeys (LegacyCipher sharedKey) (ohBaseNonce oh) } $
+    createHandshake cookieKey (ohOtherCookie oh) >>= setTempPacket
+
+-- | Answers the peer's Noise initiator packet.
+acceptNoiseSession :: (Timed m, MonadRandomBytes m, Networked m)
+                   => HandshakeMode -> KeyPair -> KeyPair -> NodeInfo -> OpenedNoise -> m (Maybe SecureSessionState)
+acceptNoiseSession mode ourRealKp ourDhtKp from on = do
+  ss <- newSessionState mode ourRealKp (onPeerRealPk on) ourDhtKp (onPeerDhtPk on) from NotConfirmed
+  (answered, ss') <- runStateT (respondNoise on) ss
+  return $ if answered then Just ss' else Nothing
+
+-- | Must carry an unexpired cookie of ours, sign the hash of that cookie, and
+-- be encrypted with the real key named in the cookie.
+openHandshake :: (Timed m, Keyed m)
+              => CombinedKey -> SecretKey -> ByteString -> m (Maybe OpenedHandshake)
+openHandshake cookieKey ourRealSk payload = do
+  now <- askTime
+  case decodeExact handshakeLength payload of
+    Nothing -> return Nothing
+    Just h -> case openCookie cookieKey now (hCookie h) of
+      Nothing -> return Nothing
+      Just ci -> do
+        realSharedKey <- getCombinedKey ourRealSk (ciSenderRealPk ci)
+        return $ do
+          hi <- Box.decrypt realSharedKey (hNonce h) (hEncryptedMessage h) >>= Box.decode
+          guard $ hiCookieHash hi == cookieHash (hCookie h)
+          return OpenedHandshake
+            { ohPeerRealPk  = ciSenderRealPk ci
+            , ohPeerDhtPk   = ciSenderDhtPk ci
+            , ohBaseNonce   = hiBaseNonce hi
+            , ohSessionPk   = hiSessionPk hi
+            , ohOtherCookie = hiOtherCookie hi
+            }
+
+createHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m)
+                => CombinedKey -> Cookie -> m (Packet RawPayload)
+createHandshake cookieKey cookie = do
+  ss <- get
+  now <- askTime
+  otherCookie <- createCookie cookieKey (cookieTime now) (ssPeerRealPk ss) (ssPeerDhtPk ss)
+  nonce <- randomNonce
+  realSharedKey <- getRealSharedKey ss
+  let hi = HandshakeInner (ssSentNonce ss) (KeyPair.publicKey $ ssOurSessionKeyPair ss) (cookieHash cookie) otherCookie
+  return $ rawPacket PacketKind.CryptoHandshake $
+    Handshake cookie nonce (Box.encrypt realSharedKey nonce (Box.encode hi))
+
+encodeBytes :: Binary a => a -> ByteString
+encodeBytes = LBS.toStrict . Binary.encode
+
+zeroNonce :: Nonce
+zeroNonce = Nonce.integerToNonce 0
+
+-- | @-> e, es, s, ss@ with the peer's cookie, carrying a cookie of ours.
+createNoiseInitiation :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m)
+                      => CombinedKey -> Cookie -> m (Maybe (NoiseInitiator, Packet RawPayload))
+createNoiseInitiation cookieKey cookie = do
+  ss <- get
+  now <- askTime
+  ourCookie <- createCookie cookieKey (cookieTime now) (ssPeerRealPk ss) (ssPeerDhtPk ss)
+  eph <- newKeyPair
+  let ourKp = ssOurRealKeyPair ss
+      peerPk = ssPeerRealPk ss
+      ephPk = KeyPair.publicKey eph
+      s0 = Noise.mixHash (encodeBytes ephPk) $
+        Noise.initialize (BS.cons noiseVersion (encodeBytes cookie)) peerPk
+  return $ do
+    (s1, k1) <- Noise.mixKey (KeyPair.secretKey eph) peerPk s0
+    let (static, s2) = Noise.encryptAndHash k1 (encodeBytes $ KeyPair.publicKey ourKp) s1
+    (s3, k2) <- Noise.mixKey (KeyPair.secretKey ourKp) peerPk s2
+    let (payload, s4) = Noise.encryptAndHash k2 (encodeBytes ourCookie) s3
+    return ( NoiseInitiator eph s4
+           , rawPacket PacketKind.NoiseHandshake $ NoiseInitiation noiseVersion cookie ephPk static payload )
+
+-- | Must carry an unexpired cookie of ours, made for the static key it
+-- carries. The cookie is checked first, as it costs no X25519.
+openNoiseInitiation :: CombinedKey -> KeyPair -> Timestamp -> ByteString -> Maybe OpenedNoise
+openNoiseInitiation cookieKey ourKp now payload = do
+  n <- decodeExact noiseInitiationLength payload
+  guard $ nInitVersion n == noiseVersion
+  ci <- openCookie cookieKey now (nInitCookie n)
+  let ourSk = KeyPair.secretKey ourKp
+      eph = nInitEphemeral n
+      s0 = Noise.mixHash (encodeBytes eph) $
+        Noise.initialize (BS.take (1 + cookieLength) payload) (KeyPair.publicKey ourKp)
+  (s1, k1) <- Noise.mixKey ourSk eph s0
+  (static, s2) <- Noise.decryptAndHash k1 (nInitStatic n) s1
+  peerPk <- Sodium.decode static
+  guard $ peerPk == ciSenderRealPk ci
+  (s3, k2) <- Noise.mixKey ourSk peerPk s2
+  (cookieBytes, s4) <- Noise.decryptAndHash k2 (nInitPayload n) s3
+  otherCookie <- decodeExact cookieLength cookieBytes
+  return $ OpenedNoise peerPk (ciSenderDhtPk ci) eph otherCookie s4
+
+-- | @<- e, ee, se@, sending back the initiator's cookie. We have the
+-- session keys once it's sent.
+respondNoise :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Networked m)
+             => OpenedNoise -> m Bool
+respondNoise on = do
+  eph <- newKeyPair
+  let ephPk = KeyPair.publicKey eph
+      s5 = Noise.mixHash (encodeBytes ephPk) (onSymmetric on)
+      answered = do
+        (s6, _) <- Noise.mixKey (KeyPair.secretKey eph) (onPeerEphemeral on) s5
+        (s7, k) <- Noise.mixKey (KeyPair.secretKey eph) (onPeerRealPk on) s6
+        return $ Noise.encryptAndHash k (encodeBytes $ onOtherCookie on) s7
+  case answered of
+    Nothing -> return False
+    Just (payload, s8) -> do
+      let (initiatorKey, responderKey) = Noise.split s8
+      modify $ \s -> s
+        { ssKeys = Just $ SessionKeys (NoiseCipher responderKey initiatorKey) zeroNonce
+        , ssSentNonce = zeroNonce
+        , ssNoiseInitiator = Nothing
+        , ssStatus = NotConfirmed
+        }
+      setTempPacket . rawPacket PacketKind.NoiseHandshake $ NoiseResponse noiseVersion ephPk payload
+      return True
+
+-- | The responder's answer, with the peer's DHT key from our cookie.
+openNoiseResponse :: CombinedKey -> Timestamp -> SecureSessionState -> NoiseInitiator -> ByteString
+                  -> Maybe (PublicKey, SessionKeys)
+openNoiseResponse cookieKey now ss ni payload = do
+  n <- decodeExact noiseResponseLength payload
+  guard $ nRespVersion n == noiseVersion
+  let eph = nRespEphemeral n
+      s5 = Noise.mixHash (encodeBytes eph) (niSymmetric ni)
+  (s6, _) <- Noise.mixKey (KeyPair.secretKey $ niEphemeral ni) eph s5
+  (s7, k) <- Noise.mixKey (KeyPair.secretKey $ ssOurRealKeyPair ss) eph s6
+  (cookieBytes, s8) <- Noise.decryptAndHash k (nRespPayload n) s7
+  ci <- decodeExact cookieLength cookieBytes >>= openCookie cookieKey now
+  guard $ ciSenderRealPk ci == ssPeerRealPk ss
+  let (initiatorKey, responderKey) = Noise.split s8
+  return (ciSenderDhtPk ci, SessionKeys (NoiseCipher initiatorKey responderKey) zeroNonce)
+
+encryptData :: TransportCipher -> Nonce -> PlainText -> CipherText
+encryptData (LegacyCipher key) nonce plain = Box.encrypt key nonce plain
+encryptData (NoiseCipher key _) nonce (PlainText bytes) =
+  -- Never fails: an AEAD result always has its tag.
+  either (error . show) id . runValidate . Box.cipherText $ Noise.encryptTransport key nonce bytes
+
+decryptData :: TransportCipher -> Nonce -> CipherText -> Maybe PlainText
+decryptData (LegacyCipher key) nonce cipher = Box.decrypt key nonce cipher
+decryptData (NoiseCipher _ key) nonce cipher =
+  PlainText <$> Noise.decryptTransport key nonce (Box.unCipherText cipher)
+
+setTempPacket :: (MonadState SecureSessionState m, Timed m, Networked m)
+              => Packet RawPayload -> m ()
+setTempPacket pkt = do
+  modify $ \s -> s { ssTempPacket = Just pkt, ssTempSent = 0, ssTempLastSent = Nothing }
+  sendTempPacket
+
+sendTempPacket :: (MonadState SecureSessionState m, Timed m, Networked m) => m ()
+sendTempPacket = do
+  ss <- get
+  forM_ (ssTempPacket ss) $ \pkt -> do
+    now <- askTime
+    sendPacket (ssPeerNodeInfo ss) pkt
+    modify $ \s -> s { ssTempSent = ssTempSent s + 1, ssTempLastSent = Just now }
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Session Handlers.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Keeps no state.
+handleCookieRequest :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLog m)
+                    => CombinedKey -> KeyPair -> NodeInfo -> ByteString -> m ()
+handleCookieRequest cookieKey ourDhtKp from payload =
+  case decodeExact cookieRequestLength payload of
+    Nothing -> logWarn "Failed to decode CookieRequest"
+    Just (cr :: CookieRequest) -> do
+      sharedKey <- getCombinedKey (KeyPair.secretKey ourDhtKp) (crSenderDhtPk cr)
+      case Box.decrypt sharedKey (crNonce cr) (crEncryptedMessage cr) >>= Box.decode of
+        Nothing -> logWarn "Failed to decrypt CookieRequest"
+        Just (cri :: CookieRequestInner) -> do
+          now <- askTime
+          cookie <- createCookie cookieKey (cookieTime now) (criSenderRealPk cri) (crSenderDhtPk cr)
+          nonce <- randomNonce
+          let rsi = CookieResponseInner cookie (criEchoId cri)
+          sendPacket from $ rawPacket PacketKind.CookieResponse $
+            CookieResponse nonce (Box.encrypt sharedKey nonce (Box.encode rsi))
+
+-- | Cookie response, handshake or data packet from the peer.
+handlePacket :: SessionMonad m => CombinedKey -> NodeInfo -> Packet ByteString -> m [SessionEvent]
+handlePacket cookieKey from (Packet kind payload) = case kind of
+  PacketKind.CookieResponse  -> [] <$ handleCookieResponse cookieKey payload
+  PacketKind.CryptoHandshake -> handleHandshake cookieKey payload
+  PacketKind.NoiseHandshake  -> handleNoiseHandshake cookieKey from payload
+  PacketKind.CryptoData      -> handleCryptoData from payload
+  _                          -> return []
+
+handleCookieResponse :: SessionMonad m => CombinedKey -> ByteString -> m ()
+handleCookieResponse cookieKey payload = do
+  ss <- get
+  case ssStatus ss of
+    CookieRequesting echoId -> do
+      dhtSharedKey <- getDhtSharedKey ss
+      let decrypted = do
+            rs <- decodeExact cookieResponseLength payload
+            Box.decrypt dhtSharedKey (rsNonce rs) (rsEncryptedMessage rs) >>= Box.decode
+      case decrypted of
+        Just rsi | rsiEchoId rsi == echoId ->
+          if not (ssNoise ss)
+          then do
+            createHandshake cookieKey (rsiCookie rsi) >>= setTempPacket
+            modify $ \s -> s { ssStatus = HandshakeSent }
+          else createNoiseInitiation cookieKey (rsiCookie rsi) >>= mapM_ (\(ni, pkt) -> do
+            modify $ \s -> s { ssNoiseInitiator = Just ni, ssStatus = HandshakeSent }
+            setTempPacket pkt)
+        _ -> logWarn "Invalid CookieResponse"
+    _ -> return ()
+
+handleHandshake :: SessionMonad m => CombinedKey -> ByteString -> m [SessionEvent]
+handleHandshake cookieKey payload = do
+  ss <- get
+  -- Past its handshake, a Noise session takes no legacy one.
+  if ssStatus ss == Established || ssMode ss == NoiseOnly || (ssNoise ss && not (awaitsHandshake ss)) then return [] else do
+    opened <- openHandshake cookieKey (KeyPair.secretKey $ ssOurRealKeyPair ss) payload
+    case opened of
+      Just oh | ohPeerRealPk oh == ssPeerRealPk ss ->
+        if ohPeerDhtPk oh /= ssPeerDhtPk ss
+        then return [SessionDhtPkChanged $ ohPeerDhtPk oh]
+        else do
+          let fallback = ssNoise ss
+          when fallback fallBack
+          case ssStatus ss of
+            CookieRequesting _ -> createHandshake cookieKey (ohOtherCookie oh) >>= setTempPacket
+            -- We may have sent a Noise packet, which the peer ignored.
+            _ | fallback       -> createHandshake cookieKey (ohOtherCookie oh) >>= setTempPacket
+            _                  -> return ()
+          [] <$ takeHandshake oh
+      _ -> [] <$ logWarn ("Invalid Handshake in the session with " <> pack (show (ssPeerRealPk ss)))
+
+-- | The peer only has the legacy handshake.
+fallBack :: (MonadState SecureSessionState m, MonadLog m) => m ()
+fallBack = do
+  logInfo "SecureSession falls back to the legacy handshake"
+  modify $ \s -> s { ssNoise = False, ssNoiseInitiator = Nothing }
+
+handleNoiseHandshake :: SessionMonad m => CombinedKey -> NodeInfo -> ByteString -> m [SessionEvent]
+handleNoiseHandshake cookieKey from payload = do
+  ss <- get
+  now <- askTime
+  if not (ssNoise ss) || not (awaitsHandshake ss) then return [] else
+    if BS.length payload == noiseResponseLength
+    then case ssNoiseInitiator ss >>= \ni -> openNoiseResponse cookieKey now ss ni payload of
+      Nothing -> [] <$ logWarn ("Invalid Noise response in the session with " <> pack (show (ssPeerRealPk ss)))
+      Just (dhtPk, keys)
+        | dhtPk /= ssPeerDhtPk ss -> return [SessionDhtPkChanged dhtPk]
+        | otherwise -> [] <$ modify (\s -> s
+            { ssKeys = Just keys, ssSentNonce = zeroNonce, ssNoiseInitiator = Nothing, ssStatus = NotConfirmed })
+    else case openNoiseInitiation cookieKey (ssOurRealKeyPair ss) now payload of
+      Just on | onPeerRealPk on == ssPeerRealPk ss -> adoptNoise from on
+      _ -> [] <$ logWarn ("Invalid Noise handshake in the session with " <> pack (show (ssPeerRealPk ss)))
+
+-- | The peer's initiator packet for a session that 'awaitsHandshake' with
+-- Noise. Both of us started, so the greater long term key stays the
+-- initiator and the other answers.
+adoptNoise :: SessionMonad m => NodeInfo -> OpenedNoise -> m [SessionEvent]
+adoptNoise from on = do
+  ss <- get
+  case compare (KeyPair.publicKey $ ssOurRealKeyPair ss) (onPeerRealPk on) of
+    EQ -> return []
+    GT -> [] <$ modify (\s -> s { ssPeerNodeInfo = from })
+    LT
+      | onPeerDhtPk on /= ssPeerDhtPk ss -> return [SessionDhtPkChanged $ onPeerDhtPk on]
+      | otherwise -> do
+          modify $ \s -> s { ssPeerNodeInfo = from }
+          [] <$ respondNoise on
+
+awaitsHandshake :: SecureSessionState -> Bool
+awaitsHandshake ss = case ssStatus ss of
+  CookieRequesting _ -> True
+  HandshakeSent      -> True
+  _                  -> False
+
+-- | For a session that 'awaitsHandshake', when it came another way than the
+-- session's. As in toxcore, keep our session key (the peer may use it
+-- already) and answer with our handshake the way theirs came.
+adoptHandshake :: SessionMonad m => CombinedKey -> NodeInfo -> OpenedHandshake -> m ()
+adoptHandshake cookieKey from oh = do
+  noise <- gets ssNoise
+  when noise fallBack
+  modify $ \s -> s { ssPeerNodeInfo = from }
+  createHandshake cookieKey (ohOtherCookie oh) >>= setTempPacket
+  takeHandshake oh
+
+takeHandshake :: SessionMonad m => OpenedHandshake -> m ()
+takeHandshake oh = do
+  ss <- get
+  sharedKey <- getCombinedKey (KeyPair.secretKey $ ssOurSessionKeyPair ss) (ohSessionPk oh)
+  modify $ \s -> s { ssKeys = Just $ SessionKeys (LegacyCipher sharedKey) (ohBaseNonce oh), ssStatus = NotConfirmed }
+
+handleCryptoData :: SessionMonad m => NodeInfo -> ByteString -> m [SessionEvent]
+handleCryptoData from payload = do
+  ss <- get
+  case ssKeys ss of
+    Just keys | ssStatus ss `elem` [NotConfirmed, Established]
+              , BS.length payload < Reliability.maxCryptoPacketSize ->
+      case Box.decode (PlainText payload) of
+        Nothing -> return []
+        Just (cd :: CryptoDataPacket) -> do
+          let (nonce, recvNonce) = packetNonce (skRecvNonce keys) (cdNonceShort cd)
+          case decryptData (skCipher keys) nonce (cdPayload cd) >>= Reliability.decodeData . unPlainText of
+            -- Happens after a restart, as the peer keeps using the old session keys for a while.
+            Nothing -> [] <$ logDebug ("Failed to decrypt CryptoData from " <> pack (show (ssPeerRealPk ss)) <> " at " <> pack (show from))
+            Just (bufferStart, num, bytes) -> do
+              now <- askTime
+              let udp = protocol from == UDP
+                  moves = udp || protocol (ssPeerNodeInfo ss) /= UDP
+                    || Time.due now udpDirectTimeout (ssLastUdpRecv ss)
+                  to = if moves then from else ssPeerNodeInfo ss
+                  moved = protocol to /= protocol (ssPeerNodeInfo ss)
+              when moved $
+                logInfo $ "SecureSession moved to " <> pack (show to)
+              modify $ \s -> s { ssKeys = Just keys { skRecvNonce = recvNonce }, ssPeerNodeInfo = to
+                               , ssLastUdpRecv = if udp then Just now else ssLastUdpRecv s }
+              ([SessionMoved | moved] ++) <$> handleDataContents bufferStart num bytes
+    _ -> return []
+
+handleDataContents :: SessionMonad m => Word32 -> Word32 -> ByteString -> m [SessionEvent]
+handleDataContents bufferStart num bytes = do
+  rel <- gets ssReliability
+  case Reliability.clearSentUntil bufferStart rel of
+    Nothing -> return []
+    Just rel' -> do
+      now <- askTime
+      -- toxcore only measures round trips with request packets, which name
+      -- no packets (and measure nothing) on a link that loses nothing.
+      forM_ (Reliability.latestSentBefore bufferStart rel) $ \sent ->
+        modify $ \s -> s { ssRtt = min (ssRtt s) (Time.diffTime now sent) }
+      modify $ \s -> s { ssReliability = rel' }
+      let ident = BS.head bytes
+          acked = [ SessionRoom | Reliability.paStart (Reliability.rsSend rel') /= Reliability.paStart (Reliability.rsSend rel) ]
+      if ident == packetIdKill then return [SessionKilled] else do
+        confirmed <- confirm
+        delivered <- dispatch ident
+        return $ acked ++ confirmed ++ delivered
+  where
+    confirm = do
+      status <- gets ssStatus
+      if status /= NotConfirmed then return [] else do
+        logInfo "SecureSession established"
+        modify $ \s -> s { ssStatus = Established, ssTempPacket = Nothing }
+        return [SessionEstablished]
+
+    dispatch ident
+      | ident == Reliability.packetIdRequest = do
+          now <- askTime
+          s <- get
+          let udp = NodeInfo.protocol (ssPeerNodeInfo s) == UDP
+              delay = if udp then ssRtt s else tcpResendDelay
+          forM_ (Reliability.handleRequest now delay bytes (ssReliability s)) $ \(rel', latest) -> do
+            setReliability $ fromMaybe rel' (Reliability.setReceivedEnd num rel')
+            forM_ latest $ \sent -> modify $ \s' -> s' { ssRtt = min (ssRtt s') (Time.diffTime now sent) }
+          return []
+      | isLossless ident = do
+          rel <- gets ssReliability
+          case Reliability.addReceived num bytes rel of
+            Nothing -> return []
+            Just rel' -> do
+              modify $ \s -> s { ssPacketCounter = ssPacketCounter s + 1 }
+              let (received, rel'') = Reliability.takeReceived rel'
+              setReliability rel''
+              return $ map SessionLosslessData received
+      | isLossy ident = do
+          rel <- gets ssReliability
+          forM_ (Reliability.setReceivedEnd num rel) setReliability
+          return [SessionLossyData bytes]
+      | otherwise = return []
+
+    setReliability rel = modify $ \s -> s { ssReliability = rel }
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Sending Data.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Sends it with the next nonce.
+sendDataPacket :: (MonadState SecureSessionState m, Timed m, Networked m)
+               => Word32 -> ByteString -> m ()
+sendDataPacket num bytes = gets ssPeerNodeInfo >>= \to -> sendDataPacketTo to num bytes
+
+sendDataPacketTo :: (MonadState SecureSessionState m, Timed m, Networked m)
+                 => NodeInfo -> Word32 -> ByteString -> m ()
+sendDataPacketTo to num bytes = do
+  ss <- get
+  forM_ (ssKeys ss) $ \keys -> do
+    let bufferStart = Reliability.paStart . Reliability.rsRecv $ ssReliability ss
+        plain = PlainText $ Reliability.encodeData bufferStart num bytes
+        cd = CryptoDataPacket (nonceShort $ ssSentNonce ss) (encryptData (skCipher keys) (ssSentNonce ss) plain)
+    sendPacket to $ rawPacket PacketKind.CryptoData cd
+    now <- askTime
+    let tcp = protocol to == TCP
+    modify $ \s -> s
+      { ssSentNonce = Nonce.increment (ssSentNonce s)
+      , ssLastTcpSent = if tcp then Just now else ssLastTcpSent s
+      , ssLastUdpSent = if tcp then ssLastUdpSent s else Just now
+      , ssAckSent = bufferStart
+      }
+
+-- | Next lossless packet number.
+sendBufferEnd :: SecureSessionState -> Word32
+sendBufferEnd = Reliability.paEnd . Reliability.rsSend . ssReliability
+
+-- | Data starts with the packet ID. Gives the packet number, or 'Nothing' if
+-- the session isn't established or the send buffer is full. On a busy link
+-- it waits for 'sendUnsent'.
+sendLossless :: (MonadState SecureSessionState m, Timed m, Networked m)
+             => ByteString -> m (Maybe Word32)
+sendLossless bytes = do
+  ss <- get
+  case Reliability.addSent bytes (ssReliability ss) of
+    Just (num, rel) | ssStatus ss == Established -> do
+      modify $ \s -> s { ssReliability = rel }
+      busy <- linkBusy (ssPeerNodeInfo ss)
+      unless busy $ do
+        sendDataPacketTo (ssPeerNodeInfo ss) num bytes
+        now <- askTime
+        modify $ \s -> s { ssReliability = Reliability.markSent now num (ssReliability s) }
+      return $ Just num
+    _ -> return Nothing
+
+-- | Data starts with the packet ID. Dropped if the session isn't established
+-- or the link is busy.
+sendLossy :: (MonadState SecureSessionState m, Timed m, Networked m) => ByteString -> m Bool
+sendLossy bytes = do
+  ss <- get
+  busy <- linkBusy (ssPeerNodeInfo ss)
+  case BS.uncons bytes of
+    Just (ident, _)
+      | isLossy ident && BS.length bytes <= Reliability.maxCryptoDataSize
+      && ssStatus ss == Established && not busy -> do
+          sendDataPacket (sendBufferEnd ss) bytes
+          return True
+    _ -> return False
+
+-- | Counts against congestion control (e.g. file data). Goes out even with
+-- no budget left, as callers check 'freeSendSlots' first.
+sendCongested :: (MonadState SecureSessionState m, Timed m, Networked m)
+              => ByteString -> m (Maybe Word32)
+sendCongested bytes = do
+  sent <- sendLossless bytes
+  forM_ sent $ \_ -> modify $ \s -> s { ssCongestion = Stream.sentNew (ssCongestion s) }
+  return sent
+
+-- | Congestion controlled packets we may still queue.
+freeSendSlots :: SecureSessionState -> Int
+freeSendSlots ss =
+  min (Stream.ccPacketsLeft $ ssCongestion ss) (fromIntegral Reliability.bufferSize - sendQueueLength ss)
+
+sendQueueLength :: SecureSessionState -> Int
+sendQueueLength = fromIntegral . Reliability.arrayLength . Reliability.rsSend . ssReliability
+
+-- | Lossless packets it holds, both ways.
+packetsHeld :: SecureSessionState -> Int
+packetsHeld ss = sendQueueLength ss + fromIntegral (Reliability.arrayLength . Reliability.rsRecv $ ssReliability ss)
+
+maxPacketsHeld :: Int
+maxPacketsHeld = 2 * fromIntegral Reliability.bufferSize
+
+isDelivered :: Word32 -> SecureSessionState -> Bool
+isDelivered num ss = num - Reliability.paStart send >= Reliability.arrayLength send
+  where
+    send = Reliability.rsSend (ssReliability ss)
+
+sendKill :: (MonadState SecureSessionState m, Timed m, Networked m) => m ()
+sendKill = do
+  ss <- get
+  sendDataPacket (sendBufferEnd ss) (BS.singleton packetIdKill)
+
+sendRequest :: (MonadState SecureSessionState m, Timed m, Networked m) => m ()
+sendRequest = do
+  ss <- get
+  now <- askTime
+  sendDataPacket (sendBufferEnd ss) $ Reliability.requestPacket Reliability.maxCryptoDataSize (ssReliability ss)
+  modify $ \s -> s { ssLastRequestSent = Just now }
+
+-- | Lossless packets that waited for the link, or that the peer asked for
+-- again, as many as congestion control and the link allow.
+sendUnsent :: (MonadState SecureSessionState m, Timed m, Networked m) => m ()
+sendUnsent = do
+  budget <- gets (Stream.resendBudget . ssCongestion)
+  unsent <- gets (take budget . Reliability.unsentPackets . ssReliability)
+  sent <- go unsent
+  now <- askTime
+  -- toxcore doesn't count a turn with no budget at all.
+  when (budget > 0) $ modify $ \s -> s { ssCongestion = Stream.resent now sent (ssCongestion s) }
+  where
+    go [] = return (0 :: Int)
+    go ((num, bytes) : rest) = do
+      busy <- gets ssPeerNodeInfo >>= linkBusy
+      if busy then return 0 else do
+        sendDataPacket num bytes
+        now <- askTime
+        modify $ \s -> s { ssReliability = Reliability.markSent now num (ssReliability s) }
+        (+ 1) <$> go rest
+
+-- | How fast packets arrive, and (once established) how fast we may send.
+-- It stops sampling while it rests, and counts from when that ends.
+updateRecvRate :: MonadState SecureSessionState m => Timestamp -> m ()
+updateRecvRate now = modify $ \s -> case ssCounterSince s of
+  Just since | Time.addTime since packetCounterInterval > now -> s
+  Just since -> rest $ sampled s
+    { ssRecvRate = fromIntegral (ssPacketCounter s) * 1000 / millis (Time.diffTime now since)
+    , ssPacketCounter = 0
+    , ssCounterSince = Just now
+    }
+  Nothing | resting now s -> s
+  Nothing -> s { ssCounterSince = Just now }
+  where
+    rest s = if resting now s then s { ssCounterSince = Nothing } else s
+    millis d = max 1 (fromIntegral (Time.toMilliseconds d))
+    sampled s
+      | ssStatus s /= Established = s
+      | otherwise = s { ssCongestion = Stream.sample (ssRtt s) (sendQueueLength s) (justDirect s) now (ssCongestion s) }
+    justDirect s = NodeInfo.protocol (ssPeerNodeInfo s) == UDP
+      && not (Time.due now Stream.congestionTimeout (ssLastTcpSent s))
+
+-- | While data comes in fast, toxcore asks for missing packets (which also
+-- tells the sender what arrived) as often as every 50 ms.
+requestInterval :: SecureSessionState -> TimeDiff
+requestInterval ss
+  | ssStatus ss /= Established || rate <= minPacketRate = sendPacketInterval
+  | otherwise = Time.milliseconds . round . max counterMs . min sendMs $ min byBacklog byRate
+  where
+    rate = ssRecvRate ss
+    backlog = fromIntegral . Reliability.arrayLength . Reliability.rsRecv $ ssReliability ss
+    counterMs = fromIntegral $ Time.toMilliseconds packetCounterInterval
+    sendMs = fromIntegral $ Time.toMilliseconds sendPacketInterval
+    byBacklog = requestCompareConstant / ((backlog + 1) / (rate + 1)) :: Double
+    byRate = (minPacketRate / rate) * sendMs + counterMs
+
+-- | No packets came in the last sample or since, none wait to go, and
+-- congestion control rests. Sampling would change nothing.
+resting :: Timestamp -> SecureSessionState -> Bool
+resting now ss =
+  ssPacketCounter ss == 0 && ssRecvRate ss == 0 && Set.null (Reliability.rsUnsent $ ssReliability ss)
+    && (ssStatus ss /= Established || Stream.resting (sendQueueLength ss) now (ssCongestion ss))
+
+-- | The peer doesn't know yet which of its packets we have (or that we have
+-- its handshake), or how many we sent.
+untold :: SecureSessionState -> Bool
+untold ss = case ssStatus ss of
+  NotConfirmed -> True
+  Established ->
+    Reliability.paStart recv /= ssAckSent ss || Reliability.arrayLength recv > 0
+      || Reliability.arrayLength (Reliability.rsSend rel) > 0
+  _ -> False
+  where
+    rel = ssReliability ss
+    recv = Reliability.rsRecv rel
+
+-- | A request tells the peer what it doesn't know yet, at most every
+-- 'requestInterval'. Over UDP one goes every 'keepaliveInterval' anyway.
+requestDue :: Timestamp -> SecureSessionState -> Maybe Timestamp
+requestDue now ss = fmap minimum . nonEmpty . catMaybes $
+  [ after (requestInterval ss) (ssLastRequestSent ss) <$ guard (untold ss)
+  , after keepaliveInterval (ssLastUdpSent ss) <$ guard (ssStatus ss == Established && protocol (ssPeerNodeInfo ss) == UDP)
+  ]
+  where
+    after interval = maybe now (`Time.addTime` interval)
+
+-- | When 'maintainSession' next has a cookie request or handshake to send
+-- again, a request to send or a sample to take.
+nextDue :: Timestamp -> SecureSessionState -> Maybe Timestamp
+nextDue now ss = fmap minimum . nonEmpty . catMaybes $
+  [ maybe now (`Time.addTime` sendPacketInterval) (ssTempLastSent ss) <$ guard (ssStatus ss /= Established && isJust (ssTempPacket ss))
+  , requestDue now ss
+  , maybe (now <$ guard (not $ resting now ss)) (Just . (`Time.addTime` packetCounterInterval)) (ssCounterSince ss)
+  ]
+
+-- | Resend the cookie request or handshake until established, and send
+-- request packets and requested packets.
+maintainSession :: SessionMonad m => m [SessionEvent]
+maintainSession = do
+  ss <- get
+  now <- askTime
+  let due = Time.due now sendPacketInterval
+  if ssStatus ss /= Established && due (ssTempLastSent ss) && ssTempSent ss >= maxSendTries
+  then do
+    logDebug $ "SecureSession timed out with " <> pack (show $ ssPeerNodeInfo ss)
+    return [SessionGaveUp]
+  else do
+    when (ssStatus ss /= Established && due (ssTempLastSent ss)) sendTempPacket
+    updateRecvRate now
+    requesting <- gets (maybe False (<= now) . requestDue now)
+    when requesting sendRequest
+    if ssStatus ss /= Established then return [] else do
+      before <- gets (Stream.ccPacketsLeft . ssCongestion)
+      modify $ \s -> s { ssCongestion = Stream.refill now (ssCongestion s) }
+      after <- gets (Stream.ccPacketsLeft . ssCongestion)
+      sendUnsent
+      return [ SessionRoom | after > before ]
+\end{code}

@@ -16,6 +16,7 @@ parentheses, e.g. \href{#ping-request-0x00}{Ping Request (0x00)}.
   \texttt{0x19}     & Cookie Response \\
   \texttt{0x1a}     & Crypto Handshake \\
   \texttt{0x1b}     & Crypto Data \\
+  \texttt{0x1c}     & Noise Handshake \\
   \texttt{0x20}     & DHT Request \\
   \texttt{0x21}     & LAN Discovery \\
   \texttt{0x80}     & Onion Request 0 \\
@@ -64,6 +65,7 @@ data PacketKind
   | CookieResponse
   | CryptoHandshake
   | CryptoData
+  | NoiseHandshake
   | Crypto
   | LanDiscovery
   | OnionRequest0
@@ -77,6 +79,12 @@ data PacketKind
   | OnionResponse2
   | OnionResponse1
   | BootstrapInfo
+  | DHTPKPacket
+  | GroupHandshake
+  | GroupLossless
+  | GroupLossy
+  | GroupAnnounceRequest
+  | GroupAnnounceResponse
   deriving (Eq, Read, Show, Bounded, Enum, Generic, Typeable)
 
 
@@ -93,6 +101,7 @@ kindDescription = \case
   CookieResponse    -> "Cookie response"
   CryptoHandshake   -> "Crypto handshake"
   CryptoData        -> "Crypto data"
+  NoiseHandshake    -> "Noise handshake"
   Crypto            -> "Encrypted data"
   LanDiscovery      -> "LAN discovery"
   OnionRequest0     -> "Initial onion request"
@@ -106,6 +115,12 @@ kindDescription = \case
   OnionResponse2    -> "Second level wrapped onion response"
   OnionResponse1    -> "First level wrapped onion response"
   BootstrapInfo     -> "Bootstrap node info request and response"
+  DHTPKPacket       -> "DHT public key packet"
+  GroupHandshake    -> "Group chat handshake"
+  GroupLossless     -> "Group chat lossless packet"
+  GroupLossy        -> "Group chat lossy packet"
+  GroupAnnounceRequest  -> "Announce request with group data"
+  GroupAnnounceResponse -> "Announce response with group data"
 
 
 kindToByte :: PacketKind -> Word8
@@ -118,6 +133,7 @@ kindToByte = \case
   CookieResponse    -> 0x19
   CryptoHandshake   -> 0x1a
   CryptoData        -> 0x1b
+  NoiseHandshake    -> 0x1c
   Crypto            -> 0x20
   LanDiscovery      -> 0x21
   OnionRequest0     -> 0x80
@@ -131,6 +147,12 @@ kindToByte = \case
   OnionResponse2    -> 0x8d
   OnionResponse1    -> 0x8e
   BootstrapInfo     -> 0xf0
+  DHTPKPacket       -> 0x9c
+  GroupHandshake    -> 0x5a
+  GroupLossless     -> 0x5b
+  GroupLossy        -> 0x5c
+  GroupAnnounceRequest  -> 0x87
+  GroupAnnounceResponse -> 0x88
 
 
 byteToKind :: Word8 -> Maybe PacketKind

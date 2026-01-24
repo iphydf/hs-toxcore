@@ -27,7 +27,7 @@ integer that helps identify the response for a given request.
 \begin{code}
 
 newtype RequestId = RequestId Word64
-  deriving (Eq, Read, Show, Binary, Arbitrary, Generic)
+  deriving (Eq, Ord, Read, Show, Binary, Arbitrary, Generic)
 
 instance MessagePack RequestId
 

@@ -48,7 +48,7 @@ spec = do
 
     it "never computes a public key that is equal to the secret key" $
       property $ \sk -> do
-        let KeyPair _ (Key.Key pk) = KeyPair.fromSecretKey sk
+        let KeyPair _ pk = KeyPair.fromSecretKey sk
         Sodium.encode pk `shouldNotBe` Sodium.encode sk
 
     it "computes a usable public key from an invalid secret key" $

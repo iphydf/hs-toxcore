@@ -8,18 +8,22 @@ module Tox.Crypto.Core.KeySpec where
 import           Test.Hspec
 import           Test.QuickCheck
 
+import           Control.Exception             (evaluate)
 import           Control.Monad.Validate        (MonadValidate, runValidate)
 import qualified Crypto.Saltine.Class          as Sodium
 import           Data.Binary                   (Binary)
+import           Data.Bits                     (xor)
 import           Data.ByteString               (ByteString)
 import qualified Data.ByteString               as ByteString
+import           Data.List                     (foldl')
 import           Data.MessagePack              (DecodeError, errorMessages)
 import           Data.Proxy                    (Proxy (..))
 import           Data.Typeable                 (Typeable)
+import           System.Mem                    (getAllocationCounter)
 import qualified Text.Read                     as Read
 import           Tox.Core.TypeName             (typeName)
 import qualified Tox.Crypto.Core.Key           as Key
-import           Tox.Crypto.Core.Key           (Key (..))
+import           Tox.Crypto.Core.Key           (Key, PublicKey)
 import           Tox.Network.Core.EncodingSpec
 
 
@@ -71,7 +75,7 @@ spec = do
         actual = readMaybe "\"0100000000000000000000000000000000000000000000000000000000000010\""
         Just expected = Sodium.decode $ ByteString.pack [1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x10]
       in
-      actual `shouldBe` Just (Key expected)
+      actual `shouldBe` Just (expected :: PublicKey)
 
     it "decodes empty string to Nothing" $ do
       let actual = readMaybe ""
@@ -94,3 +98,19 @@ spec = do
     it "encodes all keys to positive Integers" $
       property $ \key ->
         Key.keyToInteger (key :: Key.PublicKey) `shouldSatisfy` (0 <=)
+
+    it "reads every byte, the first as the most significant" $
+      property $ \pk nonce ->
+        let bigEndian = ByteString.foldl' (\n w -> n * 256 + toInteger w) 0
+        in (Key.keyToInteger (pk :: Key.PublicKey), Key.keyToInteger (nonce :: Key.Nonce))
+          `shouldBe` (bigEndian (Sodium.encode pk), bigEndian (Sodium.encode nonce))
+
+    -- The DHT works out distances between keys all the time.
+    it "allocates little" $ do
+      keys <- generate (vector 1000) :: IO [Key.PublicKey]
+      _ <- evaluate (foldr seq () keys)
+      start <- getAllocationCounter
+      _ <- evaluate (foldl' (\n k -> n `xor` Key.keyToInteger k) 0 keys)
+      end <- getAllocationCounter
+      -- Per key. Reading it through Binary took over 10 KB.
+      (start - end) `div` 1000 `shouldSatisfy` (< 2000)

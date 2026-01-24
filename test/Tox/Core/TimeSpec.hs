@@ -19,13 +19,13 @@ spec = do
         in t_diff == t1
 
     it "honors fromInteger as nanoseconds" $
-      let d = fromInteger 5 :: Time.TimeDiff
-      in d `shouldBe` Time.milliseconds 0 Prelude.+ fromInteger 5
+      let d = 5 :: Time.TimeDiff
+      in d `shouldBe` Time.milliseconds 0 Prelude.+ 5
 
   describe "Timestamp" $ do
     it "can add a TimeDiff" $ property $
       \(s1 :: Integer) (s2 :: Integer) ->
-        let ts = Time.Timestamp (fromInteger s1) -- normalized via Num
+        let ts = Time.Timestamp (fromInteger s1)
             td = Time.seconds s2
             ts_plus = ts `Time.addTime` td
             td_recovered = ts_plus `Time.diffTime` ts

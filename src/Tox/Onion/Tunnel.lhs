@@ -1,205 +1,3 @@
-\begin{code}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE StrictData    #-}
-module Tox.Onion.Tunnel where
-
-import           Data.Binary               (Binary, decode, encode, get, put)
-import qualified Data.Binary.Get           as Get
-import qualified Data.Binary.Put           as Put
-import qualified Data.ByteString           as BS
-import qualified Data.ByteString.Lazy      as LBS
-import           Data.MessagePack          (MessagePack)
-import           GHC.Generics              (Generic)
-import           Test.QuickCheck.Arbitrary (Arbitrary (..))
-import qualified Test.QuickCheck.Gen       as Gen
-
-import           Tox.Crypto.Core.Box            (CipherText, PlainText (..),
-                                            cipherText, decrypt, encrypt)
-import qualified Tox.Crypto.Core.Box            as Box
-import           Tox.Crypto.Core.Key            (CombinedKey, Nonce, PublicKey,
-                                            SecretKey)
-import           Tox.Crypto.Core.Keyed          (Keyed)
-import qualified Tox.Crypto.Core.Keyed          as Keyed
-import           Tox.Crypto.Core.KeyPair        (KeyPair (..))
-import           Tox.Network.Core.HostAddress   (HostAddress (..))
-import           Tox.Network.Core.PortNumber    (PortNumber (..))
-import           Tox.Network.Core.SocketAddress (SocketAddress (..))
-
-
-{-------------------------------------------------------------------------------
- -
- - :: Implementation.
- -
- ------------------------------------------------------------------------------}
-
-
--- | Onion IP_Port format (fixed 19 bytes).
-newtype OnionIPPort = OnionIPPort { unOnionIPPort :: SocketAddress }
-  deriving (Eq, Show, Read, Generic)
-
-instance MessagePack OnionIPPort
-
-instance Binary OnionIPPort where
-  put (OnionIPPort (SocketAddress hostAddr (PortNumber port))) = do
-    case hostAddr of
-      IPv4 addr -> do
-        Put.putWord8 2
-        Put.putWord32be addr
-        Put.putByteString $ BS.replicate 12 0
-      IPv6 (a, b, c, d) -> do
-        Put.putWord8 10
-        Put.putWord32be a
-        Put.putWord32be b
-        Put.putWord32be c
-        Put.putWord32be d
-    Put.putWord16be port
-
-  get = do
-    family <- Get.getWord8
-    hostAddr <- case family of
-      2 -> do
-        addr <- Get.getWord32be
-        _ <- Get.getByteString 12
-        return $ IPv4 addr
-      10 -> do
-        a <- Get.getWord32be
-        b <- Get.getWord32be
-        c <- Get.getWord32be
-        d <- Get.getWord32be
-        return $ IPv6 (a, b, c, d)
-      f -> fail $ "Invalid Onion IP family: " ++ show f
-    OnionIPPort . SocketAddress hostAddr . PortNumber <$> Get.getWord16be
-
-instance Arbitrary OnionIPPort where
-  arbitrary = OnionIPPort <$> arbitrary
-
-
--- | Initial Onion Request (0x80).
-data OnionRequest0 = OnionRequest0
-  { onion0Nonce            :: Nonce
-  , onion0SenderPublicKey  :: PublicKey
-  , onion0EncryptedPayload :: CipherText
-  }
-  deriving (Eq, Show, Read, Generic)
-
-instance MessagePack OnionRequest0
-
-instance Binary OnionRequest0 where
-  put req = do
-    put $ onion0Nonce req
-    put $ onion0SenderPublicKey req
-    put $ onion0EncryptedPayload req
-  get = OnionRequest0 <$> get <*> get <*> get
-
-instance Arbitrary OnionRequest0 where
-  arbitrary = OnionRequest0 <$> arbitrary <*> arbitrary <*> arbitrary
-
-
--- | Intermediate Onion Request (0x81, 0x82).
-data OnionRequestRelay = OnionRequestRelay
-  { onionRelayNonce            :: Nonce
-  , onionRelayTemporaryKey     :: PublicKey
-  , onionRelayEncryptedPayload :: CipherText
-  , onionRelayReturnNonce      :: Nonce
-  , onionRelayReturnData       :: CipherText
-  }
-  deriving (Eq, Show, Read, Generic)
-
-instance MessagePack OnionRequestRelay
-
-instance Binary OnionRequestRelay where
-  put req = do
-    put $ onionRelayNonce req
-    put $ onionRelayTemporaryKey req
-    put $ onionRelayEncryptedPayload req
-    put $ onionRelayReturnNonce req
-    put $ onionRelayReturnData req
-  get = OnionRequestRelay <$> get <*> get <*> get <*> get <*> get
-
-instance Arbitrary OnionRequestRelay where
-  arbitrary = OnionRequestRelay <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
-
-
--- | Inner payload of an Onion Request (once decrypted).
-data OnionRequestPayload = OnionRequestPayload
-  { onionPayloadDestination      :: OnionIPPort
-  , onionPayloadTemporaryKey     :: PublicKey
-  , onionPayloadEncryptedPayload :: CipherText
-  }
-  deriving (Eq, Show, Read, Generic)
-
-instance MessagePack OnionRequestPayload
-
-instance Binary OnionRequestPayload where
-  put req = do
-    put $ onionPayloadDestination req
-    put $ onionPayloadTemporaryKey req
-    put $ onionPayloadEncryptedPayload req
-  get = OnionRequestPayload <$> get <*> get <*> get
-
-instance Arbitrary OnionRequestPayload where
-  arbitrary = OnionRequestPayload <$> arbitrary <*> arbitrary <*> arbitrary
-
-
--- | Intermediate Onion Response (0x8c, 0x8d, 0x8e).
-data OnionResponse = OnionResponse
-  { onionResponseNonce            :: Nonce
-  , onionResponseEncryptedSendback :: CipherText
-  , onionResponseData             :: BS.ByteString
-  }
-  deriving (Eq, Show, Read, Generic)
-
-instance MessagePack OnionResponse
-
-instance Binary OnionResponse where
-  put res = do
-    put $ onionResponseNonce res
-    put $ onionResponseEncryptedSendback res
-    Put.putByteString $ onionResponseData res
-  get = OnionResponse <$> get <*> get <*> (LBS.toStrict <$> Get.getRemainingLazyByteString)
-
-instance Arbitrary OnionResponse where
-  arbitrary = OnionResponse <$> arbitrary <*> arbitrary <*> (BS.pack <$> arbitrary)
-
-
--- | Wrap a payload for Onion Request layer 0.
-wrapOnion0 :: Keyed m
-           => KeyPair -> PublicKey -> Nonce -> OnionRequestPayload -> m OnionRequest0
-wrapOnion0 (KeyPair sk pk) receiverPk nonce payload = do
-  combined <- Keyed.getCombinedKey sk receiverPk
-  let encrypted = Box.encrypt combined nonce (Box.encode payload)
-  return $ OnionRequest0 nonce pk encrypted
-
--- | Unwrap an Onion Request layer 0.
-unwrapOnion0 :: Keyed m
-             => KeyPair -> OnionRequest0 -> m (Maybe OnionRequestPayload)
-unwrapOnion0 (KeyPair sk _) (OnionRequest0 nonce senderPk encrypted) = do
-  combined <- Keyed.getCombinedKey sk senderPk
-  case Box.decrypt combined nonce encrypted of
-    Nothing    -> return Nothing
-    Just plain -> return $ Box.decode plain
-
-
--- | Wrap an inner payload for intermediate layers.
-wrapOnionRelay :: Keyed m
-               => KeyPair -> PublicKey -> Nonce -> OnionRequestPayload -> Nonce -> CipherText -> m OnionRequestRelay
-wrapOnionRelay (KeyPair sk pk) receiverPk nonce payload retNonce retData = do
-  combined <- Keyed.getCombinedKey sk receiverPk
-  let encrypted = Box.encrypt combined nonce (Box.encode payload)
-  return $ OnionRequestRelay nonce pk encrypted retNonce retData
-
--- | Unwrap an intermediate Onion Request layer.
-unwrapOnionRelay :: Keyed m
-                 => KeyPair -> OnionRequestRelay -> m (Maybe (OnionRequestPayload, Nonce, CipherText))
-unwrapOnionRelay (KeyPair sk _) (OnionRequestRelay nonce senderPk encrypted retNonce retData) = do
-  combined <- Keyed.getCombinedKey sk senderPk
-  case Box.decrypt combined nonce encrypted of
-    Nothing    -> return Nothing
-    Just plain -> case Box.decode plain of
-      Nothing      -> return Nothing
-      Just payload -> return $ Just (payload, retNonce, retData)
-\end{code}
-
 \chapter{Onion}
 
 The goal of the onion module in Tox is to prevent peers that are not friends
@@ -432,6 +230,173 @@ sendback) at the end of the packet that grows larger and larger at every layer
 with the IP of the previous node in it.  This is how the node receiving the end
 data (Node D) will be able to send data back.
 
+\begin{code}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE StrictData    #-}
+module Tox.Onion.Tunnel where
+
+import           Control.Monad                  (guard)
+import           Control.Monad.Validate         (runValidate)
+import           Data.Binary                    (Binary, get, put)
+import qualified Data.Binary.Get                as Get
+import qualified Data.Binary.Put                as Put
+import qualified Data.ByteString                as BS
+import qualified Data.ByteString.Lazy           as LBS
+import           Data.MessagePack               (MessagePack)
+import           GHC.Generics                   (Generic)
+import           Test.QuickCheck.Arbitrary      (Arbitrary (..))
+
+import qualified Crypto.Saltine.Class           as Sodium
+import           Data.Maybe                     (fromJust)
+import           Data.Word                      (Word64, Word8)
+import qualified Tox.Crypto.Core.Box            as Box
+import           Tox.Crypto.Core.Box            (CipherText, PlainText (..),
+                                                 cipherText, decrypt, encrypt,
+                                                 unCipherText)
+import           Tox.Crypto.Core.Key            (CombinedKey, Nonce, PublicKey)
+import qualified Tox.Crypto.Core.Keyed          as Keyed
+import           Tox.Crypto.Core.Keyed          (Keyed)
+import           Tox.Crypto.Core.KeyPair        (KeyPair (..))
+import qualified Tox.Network.Core.HostAddress   as HostAddress
+import           Tox.Network.Core.HostAddress   (HostAddress (..))
+import           Tox.Network.Core.Packet        (Packet (..), RawPayload (..))
+import qualified Tox.Network.Core.PacketKind    as PacketKind
+import           Tox.Network.Core.PortNumber    (PortNumber (..))
+import           Tox.Network.Core.SocketAddress (SocketAddress (..))
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Implementation.
+ -
+ ------------------------------------------------------------------------------}
+
+
+-- | Onion IP_Port format (fixed 19 bytes).
+newtype OnionIPPort = OnionIPPort { unOnionIPPort :: SocketAddress }
+  deriving (Eq, Show, Read, Generic)
+
+instance MessagePack OnionIPPort
+
+instance Binary OnionIPPort where
+  put (OnionIPPort (SocketAddress hostAddr (PortNumber port))) = do
+    case hostAddr of
+      IPv4 addr -> do
+        Put.putWord8 2
+        HostAddress.putIPv4 addr
+        Put.putByteString $ BS.replicate 12 0
+      IPv6 (a, b, c, d) -> do
+        Put.putWord8 10
+        Put.putWord32be a
+        Put.putWord32be b
+        Put.putWord32be c
+        Put.putWord32be d
+    Put.putWord16be port
+
+  get = do
+    family <- Get.getWord8
+    hostAddr <- case family of
+      2 -> do
+        addr <- HostAddress.getIPv4
+        _ <- Get.getByteString 12
+        return $ IPv4 addr
+      10 -> do
+        a <- Get.getWord32be
+        b <- Get.getWord32be
+        c <- Get.getWord32be
+        d <- Get.getWord32be
+        return $ IPv6 (a, b, c, d)
+      f -> fail $ "Invalid Onion IP family: " ++ show f
+    OnionIPPort . SocketAddress hostAddr . PortNumber <$> Get.getWord16be
+
+instance Arbitrary OnionIPPort where
+  arbitrary = OnionIPPort <$> arbitrary
+
+
+-- | Initial Onion Request (0x80).
+data OnionRequest0 = OnionRequest0
+  { onion0Nonce            :: Nonce
+  , onion0SenderPublicKey  :: PublicKey
+  , onion0EncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance MessagePack OnionRequest0
+
+instance Binary OnionRequest0 where
+  put req = do
+    Put.putByteString . Sodium.encode . onion0Nonce $ req
+    Put.putByteString . Sodium.encode . onion0SenderPublicKey $ req
+    Put.putByteString . unCipherText . onion0EncryptedPayload $ req
+  get = do
+    nonce <- fromJust . Sodium.decode <$> Get.getByteString 24
+    pk <- fromJust . Sodium.decode <$> Get.getByteString 32
+    payload <- Get.getRemainingLazyByteString >>= cipherText . LBS.toStrict
+    return $ OnionRequest0 nonce pk payload
+
+instance Arbitrary OnionRequest0 where
+  arbitrary = OnionRequest0 <$> arbitrary <*> arbitrary <*> arbitrary
+
+
+-- | Inner payload of an Onion Request (once decrypted).
+data OnionRequestPayload = OnionRequestPayload
+  { onionPayloadDestination      :: OnionIPPort
+  , onionPayloadTemporaryKey     :: PublicKey
+  , onionPayloadEncryptedPayload :: CipherText
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance MessagePack OnionRequestPayload
+
+instance Binary OnionRequestPayload where
+  put req = do
+    put $ onionPayloadDestination req
+    Put.putByteString . Sodium.encode . onionPayloadTemporaryKey $ req
+    Put.putByteString . unCipherText . onionPayloadEncryptedPayload $ req
+  get = do
+    dest <- get
+    tempPk <- fromJust . Sodium.decode <$> Get.getByteString 32
+    payload <- Get.getRemainingLazyByteString >>= cipherText . LBS.toStrict
+    return $ OnionRequestPayload dest tempPk payload
+
+-- | Inner-most payload of an Onion Request (Node C to D).
+data OnionRequestPayloadFinal = OnionRequestPayloadFinal
+  { onionPayloadFinalDestination :: OnionIPPort
+  , onionPayloadFinalData        :: BS.ByteString
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance MessagePack OnionRequestPayloadFinal
+
+instance Binary OnionRequestPayloadFinal where
+  put req = do
+    put $ onionPayloadFinalDestination req
+    Put.putByteString $ onionPayloadFinalData req
+  get = do
+    dest <- get
+    payload <- LBS.toStrict <$> Get.getRemainingLazyByteString
+    return $ OnionRequestPayloadFinal dest payload
+
+instance Arbitrary OnionRequestPayload where
+  arbitrary = OnionRequestPayload <$> arbitrary <*> arbitrary <*> arbitrary
+
+
+wrapOnion0 :: Keyed m
+           => KeyPair -> PublicKey -> Nonce -> OnionRequestPayload -> m OnionRequest0
+wrapOnion0 (KeyPair sk pk) receiverPk nonce payload = do
+  combined <- Keyed.getCombinedKey sk receiverPk
+  let encrypted = Box.encrypt combined nonce (Box.encode payload)
+  return $ OnionRequest0 nonce pk encrypted
+
+unwrapOnion0 :: Keyed m
+             => KeyPair -> OnionRequest0 -> m (Maybe OnionRequestPayload)
+unwrapOnion0 (KeyPair sk _) (OnionRequest0 nonce senderPk encrypted) = do
+  combined <- Keyed.getCombinedKey sk senderPk
+  case Box.decrypt combined nonce encrypted of
+    Nothing    -> return Nothing
+    Just plain -> return $ Box.decode plain
+\end{code}
+
 When a peer receives an onion packet, they will decrypt it, encrypt the
 coordinates (IP/port) of the source along with the already existing encrypted
 data (if it exists) with a symmetric key known only by the peer and only
@@ -507,3 +472,132 @@ straightforward.
 Note that if the first node in the path is a TCP relay, the TCP relay must put
 an identifier (instead of an IP/Port) in the sendback so that it knows that any
 response should be sent to the appropriate peer connected to the TCP relay.
+
+\begin{code}
+{-------------------------------------------------------------------------------
+ -
+ - :: Relaying.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Size of an IP_Port inside onion packets.
+ipPortSize :: Int
+ipPortSize = 19
+
+-- | After this many relays. Each relay adds a nonce and the encrypted address
+-- of the previous hop and its return data.
+returnSize :: Int -> Int
+returnSize 0   = 0
+returnSize hop = 24 + ipPortSize + 16 + returnSize (hop - 1)
+
+data Destination = ToUdp SocketAddress | ToTcpClient Word64
+  deriving (Eq, Show)
+
+data Relayed = Relayed Destination (Packet RawPayload)
+  deriving (Eq, Show)
+
+-- | Address family of TCP clients in our return data, as in toxcore.
+tcpClientFamily :: Word8
+tcpClientFamily = 11
+
+putDestination :: Destination -> Put.Put
+putDestination (ToUdp addr) = put (OnionIPPort addr)
+putDestination (ToTcpClient client) = do
+  Put.putWord8 tcpClientFamily
+  Put.putWord64be client
+  Put.putByteString $ BS.replicate (ipPortSize - 9) 0
+
+getDestination :: Get.Get Destination
+getDestination = do
+  family <- Get.lookAhead Get.getWord8
+  if family == tcpClientFamily
+    then Get.skip 1 *> (ToTcpClient <$> Get.getWord64be) <* Get.skip (ipPortSize - 9)
+    else ToUdp . unOnionIPPort <$> get
+
+cipherTextMaybe :: BS.ByteString -> Maybe CipherText
+cipherTextMaybe = either (const Nothing) Just . runValidate . cipherText
+
+decodePacket :: BS.ByteString -> Maybe (Packet RawPayload)
+decodePacket bs = case Get.runGetOrFail get (LBS.fromStrict bs) of
+  Right (_, _, pkt) -> Just pkt
+  Left _            -> Nothing
+
+decodeIPPort :: BS.ByteString -> Maybe (SocketAddress, BS.ByteString)
+decodeIPPort bs = case Get.runGetOrFail get (LBS.fromStrict bs) of
+  Right (rest, _, OnionIPPort addr) -> Just (addr, LBS.toStrict rest)
+  Left _                            -> Nothing
+
+-- | Previous hop and its return data, sealed with our return key.
+sealReturn :: CombinedKey -> Nonce -> Destination -> BS.ByteString -> BS.ByteString
+sealReturn key nonce from ret =
+  Sodium.encode nonce <> unCipherText (encrypt key nonce plain)
+  where
+    plain = PlainText $ LBS.toStrict (Put.runPut $ putDestination from) <> ret
+
+-- | As relay 1, 2 or 3.
+openReturn :: CombinedKey -> Int -> BS.ByteString -> Maybe (Destination, BS.ByteString)
+openReturn key hop ret = do
+  guard $ BS.length ret == returnSize hop
+  let (nonceBytes, sealed) = BS.splitAt 24 ret
+  nonce <- Sodium.decode nonceBytes
+  PlainText plain <- cipherTextMaybe sealed >>= decrypt key nonce
+  case Get.runGetOrFail getDestination (LBS.fromStrict plain) of
+    Right (rest, _, to) -> Just (to, LBS.toStrict rest)
+    Left _              -> Nothing
+
+-- | As relay 1, 2 or 3, decrypt our layer and send its contents to the
+-- address in it, with our return data appended. The 3rd relay only forwards
+-- announce and data requests.
+relayRequest :: Keyed m
+             => KeyPair -> CombinedKey -> Nonce -> Int -> SocketAddress -> BS.ByteString -> m (Maybe Relayed)
+relayRequest (KeyPair sk _) returnKey returnNonce hop from payload =
+  case (Sodium.decode nonceBytes, Sodium.decode pkBytes, cipherTextMaybe sealed) of
+    (Just nonce, Just senderPk, Just ct) | BS.length rest >= returnSize (hop - 1) -> do
+      shared <- Keyed.getCombinedKey sk senderPk
+      return $ do
+        PlainText plain <- decrypt shared nonce ct
+        forwardRequest hop nonceBytes plain $ sealReturn returnKey returnNonce (ToUdp from) retIn
+    _ -> return Nothing
+  where
+    (nonceBytes, afterNonce) = BS.splitAt 24 payload
+    (pkBytes, rest) = BS.splitAt 32 afterNonce
+    (sealed, retIn) = BS.splitAt (BS.length rest - returnSize (hop - 1)) rest
+
+-- | From a client of our TCP relay, as the first relay. The client sends our
+-- layer unencrypted.
+relayTcpRequest :: CombinedKey -> Nonce -> Word64 -> BS.ByteString -> Maybe Relayed
+relayTcpRequest returnKey returnNonce client payload =
+  forwardRequest 1 nonceBytes plain $ sealReturn returnKey returnNonce (ToTcpClient client) BS.empty
+  where
+    (nonceBytes, plain) = BS.splitAt 24 payload
+
+-- | To the address in it, with our return data.
+forwardRequest :: Int -> BS.ByteString -> BS.ByteString -> BS.ByteString -> Maybe Relayed
+forwardRequest hop nonceBytes plain ret = do
+  (to, inner) <- decodeIPPort plain
+  (ident, _) <- BS.uncons inner
+  pkt <- decodePacket $ case hop of
+    1 -> BS.singleton 0x81 <> nonceBytes <> inner <> ret
+    2 -> BS.singleton 0x82 <> nonceBytes <> inner <> ret
+    _ -> inner <> ret
+  guard $ hop < 3 || ident `elem` [0x83, 0x85, 0x87]
+  return $ Relayed (ToUdp to) pkt
+
+-- | As relay 3, 2 or 1, back towards the previous hop. Relay 1 sends the
+-- bare response to the requester.
+relayResponse :: CombinedKey -> Int -> BS.ByteString -> Maybe Relayed
+relayResponse returnKey hop payload = do
+  let (ret, response) = BS.splitAt (returnSize hop) payload
+  (ident, _) <- BS.uncons response
+  guard $ ident `elem` [0x84, 0x86, 0x88]
+  (to, retOut) <- openReturn returnKey hop ret
+  pkt <- decodePacket $ case hop of
+    3 -> BS.singleton 0x8d <> retOut <> response
+    2 -> BS.singleton 0x8e <> retOut <> response
+    _ -> response
+  return $ Relayed to pkt
+
+-- | Response an announce node sends back along the request's path.
+responseToReturn :: BS.ByteString -> BS.ByteString -> Packet RawPayload
+responseToReturn ret response = Packet PacketKind.OnionResponse3 (RawPayload $ ret <> response)
+\end{code}

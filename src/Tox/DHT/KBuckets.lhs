@@ -12,26 +12,24 @@ lifetime of a k-buckets instance.
 module Tox.DHT.KBuckets where
 
 import           Data.Binary               (Binary)
-import           Data.Foldable             (toList)
 import           Data.List                 (sortBy)
 import           Data.Map                  (Map)
 import qualified Data.Map                  as Map
 import           Data.Maybe                (isJust)
 import           Data.Ord                  (comparing)
-import           Data.Traversable          (mapAccumR)
 import           Data.Word                 (Word8)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Test.QuickCheck.Gen       (Gen)
 import qualified Test.QuickCheck.Gen       as Gen
+import           Test.QuickCheck.Gen       (Gen)
 
 import           Tox.Core.Time             (Timestamp)
-import           Tox.Crypto.Core.Key            (PublicKey)
-import           Tox.DHT.ClientList        (ClientList)
+import           Tox.Crypto.Core.Key       (PublicKey)
 import qualified Tox.DHT.ClientList        as ClientList
-import           Tox.DHT.Distance          (Distance)
+import           Tox.DHT.ClientList        (ClientList)
 import qualified Tox.DHT.Distance          as Distance
-import           Tox.Network.Core.NodeInfo      (NodeInfo)
-import qualified Tox.Network.Core.NodeInfo      as NodeInfo
+import           Tox.DHT.Distance          (Distance)
+import qualified Tox.Network.Core.NodeInfo as NodeInfo
+import           Tox.Network.Core.NodeInfo (NodeInfo)
 
 
 {-------------------------------------------------------------------------------
@@ -172,6 +170,10 @@ removeNode :: PublicKey -> KBuckets -> KBuckets
 removeNode publicKey kBuckets =
   updateBucketForKey kBuckets publicKey $ ClientList.removeNode publicKey
 
+lookup :: PublicKey -> KBuckets -> Maybe NodeInfo
+lookup publicKey KBuckets{ baseKey, buckets } =
+  bucketIndex baseKey publicKey >>= (`Map.lookup` buckets) >>= ClientList.lookup publicKey
+
 viable :: NodeInfo -> KBuckets -> Bool
 viable nodeInfo KBuckets{ baseKey, buckets } =
   case bucketIndex baseKey $ NodeInfo.publicKey nodeInfo of
@@ -191,10 +193,8 @@ is the furthest away in terms of the distance metric.
 traverseClientLists ::
     Applicative f => (ClientList -> f ClientList) -> KBuckets -> f KBuckets
 traverseClientLists f kBuckets@KBuckets{ buckets } =
-  (\x -> kBuckets{ buckets = x }) <$> traverse f (reverseT buckets)
-  where
-    reverseT :: (Traversable t) => t a -> t a
-    reverseT t = snd (mapAccumR (\(x:xs) _ -> (xs, x)) (toList t) t)
+  -- Closest first (highest index). Buckets keep their indices.
+  (\x -> kBuckets{ buckets = Map.fromDistinctDescList x }) <$> traverse (traverse f) (Map.toDescList buckets)
 
 closeNodes :: PublicKey -> KBuckets -> [ (Distance, NodeInfo) ]
 closeNodes publicKey KBuckets{ baseKey, buckets } =

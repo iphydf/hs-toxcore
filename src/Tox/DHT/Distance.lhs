@@ -7,13 +7,17 @@
 module Tox.DHT.Distance where
 
 import           Control.Arrow             (first)
-import           Data.Bits                 (xor)
+import           Data.Bits                 (bit, shiftL, shiftR, testBit, xor,
+                                            (.|.))
+import           Data.List                 (sortOn)
+import           Data.Map                  (Map)
+import qualified Data.Map                  as Map
 import           GHC.Exts                  (Int (I#))
 import           GHC.Integer.Logarithms    (integerLog2#)
 import           Numeric                   (readHex, showHex)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Tox.Crypto.Core.Key            (PublicKey)
-import qualified Tox.Crypto.Core.Key            as Key (keyToInteger)
+import qualified Tox.Crypto.Core.Key       as Key (keyToInteger)
+import           Tox.Crypto.Core.Key       (PublicKey)
 
 
 {-------------------------------------------------------------------------------
@@ -77,6 +81,28 @@ xorDistance a b =
 rebaseDistance :: PublicKey -> PublicKey -> Distance -> Distance
 rebaseDistance a b (Distance d) =
   Distance $ d `xor` Key.keyToInteger a `xor` Key.keyToInteger b
+
+-- | The values of a map keyed by 'Key.keyToInteger', closest to the key first,
+-- lazily. Keys that share their high bits split at the next bit into a nearer
+-- half and a further half, so splitting down from the highest bit visits about
+-- as many keys as it returns.
+byDistance :: PublicKey -> Map Integer a -> [(Distance, a)]
+byDistance key = go (keyBits - 1)
+  where
+    target = Key.keyToInteger key
+    keyBits = 256
+    go :: Int -> Map Integer a -> [(Distance, a)]
+    go bitIndex m
+      | Map.size m <= 8 || bitIndex < 0 =
+          sortOn fst [ (Distance (k `xor` target), v) | (k, v) <- Map.toList m ]
+      | otherwise = go (bitIndex - 1) near ++ go (bitIndex - 1) far
+      where
+        -- The keys here share the bits above this one, so the first key with
+        -- this bit set has those bits, this bit, and zeros below.
+        lowest = fst (Map.findMin m)
+        middle = (lowest `shiftR` (bitIndex + 1)) `shiftL` (bitIndex + 1) .|. bit bitIndex
+        (low, high) = Map.spanAntitone (< middle) m
+        (near, far) = if testBit target bitIndex then (high, low) else (low, high)
 
 {-------------------------------------------------------------------------------
  -
