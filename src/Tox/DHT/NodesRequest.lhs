@@ -19,7 +19,7 @@ import           Data.MessagePack          (MessagePack)
 import           Data.Typeable             (Typeable)
 import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Tox.Crypto.Key            (PublicKey)
+import           Tox.Crypto.Core.Key            (PublicKey)
 
 
 {-------------------------------------------------------------------------------

@@ -12,8 +12,8 @@ import           GHC.Exts                  (Int (I#))
 import           GHC.Integer.Logarithms    (integerLog2#)
 import           Numeric                   (readHex, showHex)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Tox.Crypto.Key            (PublicKey)
-import qualified Tox.Crypto.Key            as Key (keyToInteger)
+import           Tox.Crypto.Core.Key            (PublicKey)
+import qualified Tox.Crypto.Core.Key            as Key (keyToInteger)
 
 
 {-------------------------------------------------------------------------------

@@ -16,10 +16,10 @@ import           Tox.DHT.Operation        (DhtNodeMonad, bootstrapNode, doDHT,
                                            handleNodesResponse,
                                            handlePingRequest,
                                            handlePingResponse)
-import qualified Tox.Network.Encoding     as Encoding
-import           Tox.Network.NodeInfo     (NodeInfo (..))
-import           Tox.Network.Packet       (Packet (..))
-import           Tox.Network.PacketKind   as PacketKind
+import qualified Tox.Network.Core.Encoding     as Encoding
+import           Tox.Network.Core.NodeInfo     (NodeInfo (..))
+import           Tox.Network.Core.Packet       (Packet (..))
+import           Tox.Network.Core.PacketKind   as PacketKind
 
 -- | A unified packet handler for DHT protocol packets.
 -- Decrypts the DHT envelope and dispatches to the appropriate handler.

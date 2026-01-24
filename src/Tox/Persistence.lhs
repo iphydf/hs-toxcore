@@ -36,9 +36,9 @@ import           Data.Word                   (Word16, Word32, Word8)
 import           GHC.Generics                (Generic)
 import           Test.QuickCheck.Arbitrary   (Arbitrary (..), genericShrink)
 import qualified Test.QuickCheck.Gen         as Gen
-import           Tox.Crypto.Key              (PublicKey, SecretKey)
-import           Tox.Crypto.KeyPair          (KeyPair (..))
-import qualified Tox.Crypto.KeyPair          as KeyPair
+import           Tox.Crypto.Core.Key              (PublicKey, SecretKey)
+import           Tox.Crypto.Core.KeyPair          (KeyPair (..))
+import qualified Tox.Crypto.Core.KeyPair          as KeyPair
 import           Tox.Persistence.Bytes       (Bytes)
 import           Tox.Persistence.Conferences (Conferences)
 import           Tox.Persistence.DHT         (DHT)

@@ -12,8 +12,8 @@ import           Data.Proxy               (Proxy (..))
 import qualified Tox.DHT.ClientList       as ClientList
 import           Tox.DHT.ClientList       (ClientList)
 import qualified Tox.DHT.Distance         as Distance
-import           Tox.Network.EncodingSpec
-import qualified Tox.Network.NodeInfo     as NodeInfo
+import           Tox.Network.Core.EncodingSpec
+import qualified Tox.Network.Core.NodeInfo     as NodeInfo
 
 
 spec :: Spec

@@ -36,11 +36,11 @@ import           Tox.Core.Time                (TimeDiff, Timestamp)
 import qualified Tox.Core.Time                as Time
 import           Tox.Core.Timed               (Timed)
 import qualified Tox.Core.Timed               as Timed
-import           Tox.Crypto.Key               (PublicKey)
-import           Tox.Crypto.Keyed             (Keyed)
-import           Tox.Crypto.KeyedT            (KeyedT)
-import qualified Tox.Crypto.KeyedT            as KeyedT
-import qualified Tox.Crypto.KeyPair           as KeyPair
+import           Tox.Crypto.Core.Key               (PublicKey)
+import           Tox.Crypto.Core.Keyed             (Keyed)
+import           Tox.Crypto.Keyed            (KeyedT)
+import qualified Tox.Crypto.Keyed            as KeyedT
+import qualified Tox.Crypto.Core.KeyPair           as KeyPair
 import           Tox.DHT.ClientList           (ClientList)
 import qualified Tox.DHT.ClientList           as ClientList
 import           Tox.DHT.ClientNode           (ClientNode)
@@ -58,17 +58,17 @@ import           Tox.DHT.PingPacket           (PingPacket (..))
 import           Tox.DHT.RpcPacket            (RpcPacket (..))
 import qualified Tox.DHT.RpcPacket            as RpcPacket
 import qualified Tox.DHT.Stamped              as Stamped
-import           Tox.Network.MonadRandomBytes (MonadRandomBytes)
-import qualified Tox.Network.MonadRandomBytes as MonadRandomBytes
-import           Tox.Network.Networked        (Networked)
-import qualified Tox.Network.Networked        as Networked
-import           Tox.Network.NodeInfo         (NodeInfo)
-import qualified Tox.Network.NodeInfo         as NodeInfo
-import           Tox.Network.Packet           (Packet (..))
-import           Tox.Network.PacketKind       (PacketKind)
-import qualified Tox.Network.PacketKind       as PacketKind
-import           Tox.Network.TimedT           (TimedT)
-import qualified Tox.Network.TimedT           as TimedT
+import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes)
+import qualified Tox.Network.Core.MonadRandomBytes as MonadRandomBytes
+import           Tox.Network.Core.Networked        (Networked)
+import qualified Tox.Network.Core.Networked        as Networked
+import           Tox.Network.Core.NodeInfo         (NodeInfo)
+import qualified Tox.Network.Core.NodeInfo         as NodeInfo
+import           Tox.Network.Core.Packet           (Packet (..))
+import           Tox.Network.Core.PacketKind       (PacketKind)
+import qualified Tox.Network.Core.PacketKind       as PacketKind
+import           Tox.Network.Core.TimedT           (TimedT)
+import qualified Tox.Network.Core.TimedT           as TimedT
 
 
 {-------------------------------------------------------------------------------

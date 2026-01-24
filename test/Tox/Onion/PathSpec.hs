@@ -18,21 +18,21 @@ import           System.Random                (StdGen, mkStdGen)
 import           Tox.Core.Time                (Timestamp)
 import qualified Tox.Core.Time                as Time
 import           Tox.Core.Timed               (Timed (..))
-import           Tox.Network.TimedT           (TimedT, runTimedT)
-import           Tox.Crypto.Box               (CipherText)
-import           Tox.Crypto.Key               (Nonce)
-import           Tox.Crypto.Keyed             (Keyed (..), NullKeyed (..),
+import           Tox.Network.Core.TimedT           (TimedT, runTimedT)
+import           Tox.Crypto.Core.Box               (CipherText)
+import           Tox.Crypto.Core.Key               (Nonce)
+import           Tox.Crypto.Core.Keyed             (Keyed (..), NullKeyed (..),
                                                runNullKeyed)
-import           Tox.Crypto.KeyedT            (KeyedT, evalKeyedT)
-import           Tox.Crypto.KeyPair           (KeyPair (..))
-import qualified Tox.Crypto.KeyPair           as KeyPair
-import           Tox.Network.HostAddress      (HostAddress (..))
-import           Tox.Network.MonadRandomBytes (MonadRandomBytes (..))
-import           Tox.Network.NodeInfo         (NodeInfo (..))
-import qualified Tox.Network.NodeInfo         as NodeInfo
-import           Tox.Network.PortNumber       (PortNumber (..))
-import           Tox.Network.SocketAddress    (SocketAddress (..))
-import           Tox.Network.TransportProtocol (TransportProtocol (..))
+import           Tox.Crypto.Keyed            (KeyedT, evalKeyedT)
+import           Tox.Crypto.Core.KeyPair           (KeyPair (..))
+import qualified Tox.Crypto.Core.KeyPair           as KeyPair
+import           Tox.Network.Core.HostAddress      (HostAddress (..))
+import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes (..))
+import           Tox.Network.Core.NodeInfo         (NodeInfo (..))
+import qualified Tox.Network.Core.NodeInfo         as NodeInfo
+import           Tox.Network.Core.PortNumber       (PortNumber (..))
+import           Tox.Network.Core.SocketAddress    (SocketAddress (..))
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
 
 import           Tox.Onion.Path
 import qualified Tox.Onion.Tunnel             as Tunnel

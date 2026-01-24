@@ -10,12 +10,12 @@ import qualified Data.Binary              as Binary (get, put)
 import qualified Data.Binary.Get          as Binary (runGet)
 import qualified Data.Binary.Put          as Binary (runPut)
 import           Data.Proxy               (Proxy (..))
-import           Tox.Crypto.Key           (Nonce)
-import           Tox.Crypto.KeyPair       (KeyPair (..))
+import           Tox.Crypto.Core.Key           (Nonce)
+import           Tox.Crypto.Core.KeyPair       (KeyPair (..))
 import qualified Tox.DHT.DhtPacket        as DhtPacket
 import           Tox.DHT.DhtPacket        (DhtPacket (..))
-import           Tox.Network.EncodingSpec
-import           Tox.Network.NodeInfo     (NodeInfo)
+import           Tox.Network.Core.EncodingSpec
+import           Tox.Network.Core.NodeInfo     (NodeInfo)
 
 
 encodeAndDecode :: (Binary a, Binary b) => KeyPair -> KeyPair -> Nonce -> a -> Maybe b

@@ -17,18 +17,18 @@ import           Control.Monad.State (runStateT)
 import           Tox.DHT.Server
 import           Tox.DHT.Operation
 import           Tox.DHT.DhtState as DhtState
-import           Tox.Network.NodeInfo
-import           Tox.Network.Packet
-import           Tox.Network.PacketKind as PacketKind
+import           Tox.Network.Core.NodeInfo
+import           Tox.Network.Core.Packet
+import           Tox.Network.Core.PacketKind as PacketKind
 import           Tox.Core.Time
-import qualified Tox.Crypto.KeyPair as KP
+import qualified Tox.Crypto.Core.KeyPair as KP
 import           Tox.DHT.RpcPacket
 import qualified Tox.DHT.PingPacket as Ping
 import qualified Tox.DHT.DhtPacket as DhtPacket
-import qualified Tox.Crypto.KeyedT as KeyedT
-import qualified Tox.Network.TimedT as TimedT
-import qualified Tox.Network.Encoding as Encoding
-import qualified Tox.Network.Networked as Networked
+import qualified Tox.Crypto.Keyed as KeyedT
+import qualified Tox.Network.Core.TimedT as TimedT
+import qualified Tox.Network.Core.Encoding as Encoding
+import qualified Tox.Network.Core.Networked as Networked
 
 spec :: Spec
 spec = do

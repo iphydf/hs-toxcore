@@ -22,10 +22,10 @@ The DHT public key of a friend is found using the \href{#onion}{onion} module.
 Once the DHT public key of a friend is known, the DHT is used to find them and
 connect directly to them via UDP.
 
-\input{Tox/DHT/Distance.lhs}
-\input{Tox/DHT/ClientList.lhs}
-\input{Tox/DHT/KBuckets.lhs}
-\input{Tox/DHT/DhtState.lhs}
+\input{src/Tox/DHT/Distance.lhs}
+\input{src/Tox/DHT/ClientList.lhs}
+\input{src/Tox/DHT/KBuckets.lhs}
+\input{src/Tox/DHT/DhtState.lhs}
 
 \section{Self-organisation}
 
@@ -40,12 +40,12 @@ public keys closest to X.  Eventually the peer will find the peers in the DHT
 that are the closest to that peer and, if that peer is online, they will find
 them.
 
-\input{Tox/DHT/DhtPacket.lhs}
+\input{src/Tox/DHT/DhtPacket.lhs}
 
 \section{RPC Services}
 
-\input{Tox/DHT/RpcPacket.lhs}
-\input{Tox/DHT/PingPacket.lhs}
+\input{src/Tox/DHT/RpcPacket.lhs}
+\input{src/Tox/DHT/PingPacket.lhs}
 
 \subsection{Nodes Service}
 
@@ -58,10 +58,10 @@ Only the UDP Protocol (IP Type \texttt{2} and \texttt{10}) is used in the DHT
 module when sending nodes with the packed node format.  This is because the TCP
 Protocol is used to send TCP relay information and the DHT is UDP only.
 
-\input{Tox/DHT/NodesRequest.lhs}
-\input{Tox/DHT/NodesResponse.lhs}
+\input{src/Tox/DHT/NodesRequest.lhs}
+\input{src/Tox/DHT/NodesResponse.lhs}
 
-\input{Tox/DHT/Operation.lhs}
+\input{src/Tox/DHT/Operation.lhs}
 
 \section{NATs}
 

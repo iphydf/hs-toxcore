@@ -29,7 +29,7 @@ library
   hs-source-dirs:   src
   ghc-options:      -Wall
   exposed-modules:
-    Tox
+    Tox.Toxcore
     Tox.Application.GroupChat
     Tox.Application.GroupChatPackets
     Tox.Application.LegacyGroup
@@ -40,14 +40,14 @@ library
     Tox.Core.Time
     Tox.Core.Timed
     Tox.Core.TypeName
-    Tox.Crypto
-    Tox.Crypto.Box
-    Tox.Crypto.CombinedKey
-    Tox.Crypto.Key
-    Tox.Crypto.KeyPair
+    Tox.Crypto.Core
+    Tox.Crypto.Core.Box
+    Tox.Crypto.Core.CombinedKey
+    Tox.Crypto.Core.Key
+    Tox.Crypto.Core.KeyPair
+    Tox.Crypto.Core.Keyed
     Tox.Crypto.Keyed
-    Tox.Crypto.KeyedT
-    Tox.Crypto.Nonce
+    Tox.Crypto.Core.Nonce
     Tox.Conduit.DHT
     Tox.Conduit.Encoding
     Tox.Conduit.Network
@@ -68,24 +68,24 @@ library
     Tox.DHT.RpcPacket
     Tox.DHT.Server
     Tox.DHT.Stamped
-    Tox.Network
-    Tox.Network.Backend
+    Tox.Network.Core
+    Tox.Network.Core.Backend
     Tox.Network.Discovery.LAN
-    Tox.Network.Encoding
-    Tox.Network.HostAddress
-    Tox.Network.MonadRandomBytes
-    Tox.Network.Networked
-    Tox.Network.NodeInfo
-    Tox.Network.Packet
-    Tox.Network.PacketKind
-    Tox.Network.PortNumber
-    Tox.Network.Protocol
-    Tox.Network.SocketAddress
+    Tox.Network.Core.Encoding
+    Tox.Network.Core.HostAddress
+    Tox.Network.Core.MonadRandomBytes
+    Tox.Network.Core.Networked
+    Tox.Network.Core.NodeInfo
+    Tox.Network.Core.Packet
+    Tox.Network.Core.PacketKind
+    Tox.Network.Core.PortNumber
+    Tox.Network.Core.Protocol
+    Tox.Network.Core.SocketAddress
     Tox.Network.TCP.Client
     Tox.Network.TCP.Connections
     Tox.Network.TCP.Server
-    Tox.Network.TimedT
-    Tox.Network.TransportProtocol
+    Tox.Network.Core.TimedT
+    Tox.Network.Core.TransportProtocol
     Tox.Onion.Path
     Tox.Onion.RPC
     Tox.Onion.Tunnel
@@ -177,12 +177,12 @@ test-suite testsuite
     Tox.Core.Bits.PutSpec
     Tox.Core.BitsSpec
     Tox.Core.TimeSpec
-    Tox.Crypto.BoxSpec
-    Tox.Crypto.CombinedKeySpec
-    Tox.Crypto.KeyPairSpec
-    Tox.Crypto.KeySpec
-    Tox.Crypto.NonceSpec
-    Tox.CryptoSpec
+    Tox.Crypto.Core.BoxSpec
+    Tox.Crypto.Core.CombinedKeySpec
+    Tox.Crypto.Core.KeyPairSpec
+    Tox.Crypto.Core.KeySpec
+    Tox.Crypto.Core.NonceSpec
+    Tox.Crypto.CoreSpec
     Tox.DHT.ClientListSpec
     Tox.DHT.ClientNodeSpec
     Tox.DHT.DhtPacketSpec
@@ -200,16 +200,16 @@ test-suite testsuite
     Tox.DHT.ServerSpec
     Tox.DHT.StampedSpec
     Tox.DHTSpec
-    Tox.Network.EncodingSpec
-    Tox.Network.HostAddressSpec
-    Tox.Network.MonadRandomBytesSpec
-    Tox.Network.NodeInfoSpec
-    Tox.Network.PacketKindSpec
-    Tox.Network.PacketSpec
-    Tox.Network.PortNumberSpec
-    Tox.Network.ProtocolSpec
-    Tox.Network.SocketAddressSpec
-    Tox.Network.TransportProtocolSpec
+    Tox.Network.Core.EncodingSpec
+    Tox.Network.Core.HostAddressSpec
+    Tox.Network.Core.MonadRandomBytesSpec
+    Tox.Network.Core.NodeInfoSpec
+    Tox.Network.Core.PacketKindSpec
+    Tox.Network.Core.PacketSpec
+    Tox.Network.Core.PortNumberSpec
+    Tox.Network.Core.ProtocolSpec
+    Tox.Network.Core.SocketAddressSpec
+    Tox.Network.Core.TransportProtocolSpec
     Tox.Onion.PathSpec
     Tox.Onion.TunnelSpec
     Tox.Onion.RPCSpec

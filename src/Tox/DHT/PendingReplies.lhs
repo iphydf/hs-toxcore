@@ -13,7 +13,7 @@ import           Tox.Core.Time        (Timestamp)
 import qualified Tox.DHT.RpcPacket    as RpcPacket
 import           Tox.DHT.Stamped      (Stamped)
 import qualified Tox.DHT.Stamped      as Stamped
-import           Tox.Network.NodeInfo (NodeInfo)
+import           Tox.Network.Core.NodeInfo (NodeInfo)
 
 {-------------------------------------------------------------------------------
  -

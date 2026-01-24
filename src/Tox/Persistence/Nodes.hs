@@ -8,7 +8,7 @@ import           Data.Binary               (Binary (..))
 import           Data.MessagePack          (MessagePack)
 import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Tox.Network.NodeInfo      (NodeInfo)
+import           Tox.Network.Core.NodeInfo      (NodeInfo)
 import qualified Tox.Persistence.Util      as Util
 
 newtype Nodes = Nodes [NodeInfo]

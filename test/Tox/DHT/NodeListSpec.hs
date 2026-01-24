@@ -6,8 +6,8 @@ import           Test.QuickCheck
 
 import qualified Tox.DHT.ClientList   as ClientList
 import           Tox.DHT.NodeList
-import           Tox.Network.NodeInfo (NodeInfo (..))
-import qualified Tox.Network.NodeInfo as NodeInfo
+import           Tox.Network.Core.NodeInfo (NodeInfo (..))
+import qualified Tox.Network.Core.NodeInfo as NodeInfo
 import           Tox.Core.Time        (Timestamp)
 
 spec :: Spec

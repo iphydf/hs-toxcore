@@ -35,13 +35,13 @@ import           Data.MessagePack          (MessagePack)
 import           Data.Typeable             (Typeable)
 import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Tox.Crypto.Box            (CipherText, PlainText (..),
+import           Tox.Crypto.Core.Box            (CipherText, PlainText (..),
                                             unCipherText)
-import qualified Tox.Crypto.Box            as Box
-import           Tox.Crypto.Key            (Nonce, PublicKey)
-import           Tox.Crypto.Keyed          (Keyed)
-import qualified Tox.Crypto.Keyed          as Keyed
-import           Tox.Crypto.KeyPair        (KeyPair (..))
+import qualified Tox.Crypto.Core.Box            as Box
+import           Tox.Crypto.Core.Key            (Nonce, PublicKey)
+import           Tox.Crypto.Core.Keyed          (Keyed)
+import qualified Tox.Crypto.Core.Keyed          as Keyed
+import           Tox.Crypto.Core.KeyPair        (KeyPair (..))
 
 
 

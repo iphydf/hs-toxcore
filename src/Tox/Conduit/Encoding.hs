@@ -14,8 +14,8 @@ import           Data.Conduit           (ConduitT, await, yield)
 import qualified Network.Socket         as Socket
 
 import           Tox.Conduit.Network    (toSockAddr)
-import           Tox.Network.NodeInfo   (NodeInfo (..))
-import           Tox.Network.Packet     (Packet (..))
+import           Tox.Network.Core.NodeInfo   (NodeInfo (..))
+import           Tox.Network.Core.Packet     (Packet (..))
 
 -- | Decodes raw UDP packets into Tox packets, keeping the sender's address.
 decodePacket :: MonadIO m

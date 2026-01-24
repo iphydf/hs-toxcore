@@ -1,0 +1,37 @@
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE StrictData #-}
+module Tox.Network.Core.Encoding where
+
+import           Data.Binary          (Binary, get, put)
+import           Data.Binary.Get      (Decoder (..), pushChunk,
+                                       runGetIncremental)
+import           Data.Binary.Put      (runPut)
+import           Data.ByteString      (ByteString)
+import qualified Data.ByteString      as ByteString
+import qualified Data.ByteString.Lazy as LazyByteString
+import           Tox.Core.Bits.Get    (BitGet)
+import           Tox.Core.Bits.Put    (BitPut)
+import           Tox.Crypto.Core.Box       (PlainText (..))
+
+
+class BitEncoding a where
+  bitGet :: BitGet a
+  bitPut :: a -> BitPut ()
+
+
+encode :: Binary a => a -> ByteString
+encode =
+  LazyByteString.toStrict . runPut . put
+
+
+decode :: (MonadFail m, Binary a) => ByteString -> m a
+decode bytes =
+  finish $ pushChunk (runGetIncremental get) bytes
+  where
+    finish = \case
+      Done unconsumed _ output ->
+        if ByteString.null unconsumed
+          then return output
+          else fail $ "unconsumed input: " ++ show (PlainText unconsumed)
+      Fail _ _ msg    -> fail msg
+      Partial f       -> finish $ f Nothing

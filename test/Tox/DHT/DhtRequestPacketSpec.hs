@@ -6,7 +6,7 @@ import           Test.Hspec
 
 import           Data.Proxy               (Proxy (..))
 import           Tox.DHT.DhtRequestPacket (DhtRequestPacket (..))
-import           Tox.Network.EncodingSpec
+import           Tox.Network.Core.EncodingSpec
 
 
 spec :: Spec

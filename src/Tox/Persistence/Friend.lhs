@@ -13,7 +13,7 @@ import           Data.MessagePack          (MessagePack)
 import           Data.Word                 (Word32, Word64, Word8)
 import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
-import           Tox.Crypto.Key            (PublicKey)
+import           Tox.Crypto.Core.Key            (PublicKey)
 \end{code}
 
 Friend:

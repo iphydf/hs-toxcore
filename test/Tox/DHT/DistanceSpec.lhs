@@ -8,9 +8,9 @@ import           Test.Hspec
 import           Test.QuickCheck
 
 import           Data.Proxy               (Proxy (..))
-import qualified Tox.Crypto.Key           as Key
+import qualified Tox.Crypto.Core.Key           as Key
 import           Tox.DHT.Distance
-import           Tox.Network.EncodingSpec
+import           Tox.Network.Core.EncodingSpec
 
 \end{code}
 

@@ -16,17 +16,17 @@ import qualified Data.ByteString              as BS
 import           Data.Conduit                 (ConduitT, await, yield)
 
 import           Tox.Core.Timed               (Timed (..))
-import           Tox.Crypto.Keyed             (Keyed (..))
+import           Tox.Crypto.Core.Keyed             (Keyed (..))
 import           Tox.DHT.DhtState             (DhtState)
 import           Tox.DHT.Operation            (DhtNodeMonad)
 import           Tox.DHT.Server               (handleBootstrap,
                                                handleIncomingPacket,
                                                handleMaintenance)
-import qualified Tox.Network.Encoding         as Encoding
-import           Tox.Network.MonadRandomBytes (MonadRandomBytes (..))
-import           Tox.Network.Networked        (Networked (..))
-import           Tox.Network.NodeInfo         (NodeInfo)
-import           Tox.Network.Packet           (Packet (..))
+import qualified Tox.Network.Core.Encoding         as Encoding
+import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes (..))
+import           Tox.Network.Core.Networked        (Networked (..))
+import           Tox.Network.Core.NodeInfo         (NodeInfo)
+import           Tox.Network.Core.Packet           (Packet (..))
 
 -- | A wrapper around 'ConduitT' to provide the necessary instances for DHT logic
 -- without requiring orphan instances.
