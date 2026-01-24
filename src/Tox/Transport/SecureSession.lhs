@@ -7,6 +7,10 @@
 
 module Tox.Transport.SecureSession where
 
+import           Control.Monad (when, foldM)
+import           Data.Foldable (forM_)
+import           Data.Map (Map)
+import qualified Data.Map as Map
 import           Control.Monad.State            (MonadState, get, gets, modify)
 import           Data.Binary               (Binary)
 import qualified Data.Binary               as Binary
@@ -36,6 +40,9 @@ import           Tox.Network.Core.NodeInfo         (NodeInfo(..))
 import qualified Tox.Network.Core.NodeInfo         as NodeInfo
 import           Tox.Network.Core.Networked        (Networked (..))
 import           Tox.Network.Core.TransportProtocol (TransportProtocol(UDP))
+
+import qualified Tox.Transport.Reliability      as Reliability
+import qualified Tox.Transport.Stream           as Stream
 
 import qualified System.Clock                  as Clock
 import qualified Crypto.Saltine.Class          as Sodium
@@ -556,6 +563,8 @@ data SecureSessionState = SecureSessionState
   , ssRecvPackets         :: Word64
   , ssLastAttempt         :: Maybe Timestamp
   , ssRetryCount          :: Int
+  , ssReliability         :: Reliability.ReliabilityState
+  , ssStream              :: Stream.StreamState
   } deriving (Eq, Show, Generic)
 
 
@@ -641,8 +650,8 @@ getSessionSharedKey ss = case ssPeerSessionPk ss of
 
 -- | Initial state for a new session.
 -- | Initial state for a new session.
-initSession :: MonadRandomBytes m => KeyPair -> PublicKey -> KeyPair -> PublicKey -> NodeInfo -> m SecureSessionState
-initSession ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
+initSession :: MonadRandomBytes m => Timestamp -> KeyPair -> PublicKey -> KeyPair -> PublicKey -> NodeInfo -> m SecureSessionState
+initSession now ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
   ourSessionKp <- newKeyPair
   ourBaseNonce <- randomNonce
   return SecureSessionState
@@ -654,14 +663,17 @@ initSession ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
     , ssStatus            = Nothing
     , ssOurSessionKeyPair = ourSessionKp
     , ssPeerSessionPk     = Nothing
-    , ssSharedKey         = Nothing
+    , ssSharedKey           = Nothing
     , ssOurBaseNonce      = ourBaseNonce
-    , ssPeerBaseNonce     = Nothing
+    , ssPeerBaseNonce       = Nothing
     , ssSentPackets       = 0
     , ssRecvPackets       = 0
-    , ssLastAttempt       = Nothing
+    , ssLastAttempt         = Nothing
     , ssRetryCount        = 0
+    , ssReliability       = Reliability.initState
+    , ssStream              = Stream.initState now
     }
+
 
 sendCookieRequest :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
                   => m ()
@@ -794,21 +806,34 @@ handleHandshake cookieK from payload = do
                     _ -> return ()
 
 sendCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
-               => Box.PlainText -> m ()
-sendCryptoData plain = do
+               => BS.ByteString -> m ()
+sendCryptoData msg = do
   ss <- get
   case (ssSharedKey ss, ssPeerBaseNonce ss) of
     (Just sharedKey, Just _) -> do
-      let n = ssOurBaseNonce ss
+      now <- askTime
+      let (rp, rel') = Reliability.createLossless msg (ssReliability ss)
+          -- Packet number for nonce calculation
+          Reliability.SeqNum pktNum = Reliability.rpPacketNumber rp
+          
+          n = ssOurBaseNonce ss
           nonceInt = Nonce.nonceToInteger n
-          fullNonce = Nonce.integerToNonce (nonceInt + toInteger (ssSentPackets ss))
+          fullNonce = Nonce.integerToNonce (nonceInt + toInteger pktNum)
           shortNonce = fromIntegral (Nonce.nonceToInteger fullNonce `mod` 65536)
+          
+          plain = Box.PlainText $ LBS.toStrict $ Binary.encode rp
           encrypted = Box.encrypt sharedKey fullNonce plain
           cd = CryptoDataPacket shortNonce encrypted
           pkt = Packet PacketKind.CryptoData (LBS.toStrict $ Binary.encode cd)
+          
+          stream' = Stream.recordPacketSent (Reliability.SeqNum pktNum) now (ssStream ss)
       
       sendPacket (ssPeerNodeInfo ss) pkt
-      modify $ \s -> s { ssSentPackets = ssSentPackets s + 1 }
+      modify $ \s -> s 
+        { ssReliability = rel'
+        , ssStream = stream'
+        , ssSentPackets = ssSentPackets s + 1 
+        }
     _ -> return ()
 
 handleCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
@@ -823,16 +848,143 @@ handleCryptoData from payload = do
           let nonce = calculateNonce peerBaseNonce (cdNonceShort cd)
           case Box.decrypt sharedKey nonce (cdPayload cd) of
             Nothing -> return ()
-            Just _plain -> do
-              modify $ \s -> s 
-                { ssStatus = Just SessionConfirmed
-                , ssRecvPackets = ssRecvPackets s + 1
-                , ssPeerBaseNonce = Just (updateBaseNonce peerBaseNonce (cdNonceShort cd))
-                , ssPeerNodeInfo = from -- Update for mobility
-                }
-              -- TODO: pass plain upwards
-              return ()
+            Just plain -> do
+              now <- askTime
+              case Binary.decodeOrFail (LBS.fromStrict $ Box.unPlainText plain) of
+                Left _ -> return ()
+                Right (_, _, rp :: Reliability.ReliablePacket) -> do
+                  let (rel', delivered) = Reliability.handleIncoming rp (ssReliability ss)
+                      ackStart = Reliability.rpRecvBufferStart rp
+                      stream' = foldr (\s st -> Stream.recordPacketAcked s now st) (ssStream ss) 
+                                  [s | s <- Map.keys (Reliability.rsSendWindow (ssReliability ss)), s < ackStart]
+
+                  -- Handle PacketRequests and other delivered payloads
+                  (rel'', stream'') <- foldM (processDelivered from) (rel', stream') delivered
+
+                  modify $ \s -> s 
+                    { ssStatus = Just SessionConfirmed
+                    , ssRecvPackets = ssRecvPackets s + 1
+                    , ssPeerBaseNonce = Just (updateBaseNonce peerBaseNonce (cdNonceShort cd))
+                    , ssPeerNodeInfo = from -- Update for mobility
+                    , ssReliability = rel''
+                    , ssStream = stream''
+                    }
     _ -> return ()
+
+  where
+    processDelivered peer (rel, stream) delPayload = do
+      ss <- get
+      case BS.uncons delPayload of
+        Just (1, _) -> -- Packet Request
+          case Binary.decodeOrFail (LBS.fromStrict delPayload) of
+            Left _ -> return (rel, stream)
+            Right (_, _, pr :: Reliability.PacketRequest) -> do
+              let (toResend, rel') = Reliability.handlePacketRequest pr rel
+              case (ssSharedKey ss, ssPeerBaseNonce ss) of
+                (Just sharedKey, Just _) -> do
+                  forM_ toResend $ \rp -> do
+                    let Reliability.SeqNum pktNum = Reliability.rpPacketNumber rp
+                        n = ssOurBaseNonce ss
+                        nonceInt = Nonce.nonceToInteger n
+                        fullNonce = Nonce.integerToNonce (nonceInt + toInteger pktNum)
+                        shortNonce = fromIntegral (Nonce.nonceToInteger fullNonce `mod` 65536)
+                        
+                        plain = Box.PlainText $ LBS.toStrict $ Binary.encode rp
+                        encrypted = Box.encrypt sharedKey fullNonce plain
+                        cd = CryptoDataPacket shortNonce encrypted
+                        pkt = Packet PacketKind.CryptoData (LBS.toStrict $ Binary.encode cd)
+                    sendPacket peer pkt
+                  return (rel', stream)
+                _ -> return (rel', stream)
+        _ -> return (rel, stream) -- TODO: pass other packets to application layer
+
+-- | Periodically maintain the session (handshake retries, timeouts).
+maintainSession :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                => m ()
+maintainSession = do
+  ss <- get
+  now <- askTime
+  let lastAttempt = ssLastAttempt ss
+      elapsed = case lastAttempt of
+        Nothing -> Time.seconds 9999 -- Force first attempt
+        Just t  -> now `Time.diffTime` t
+  
+  -- Retry every 1 second
+  when (elapsed >= Time.seconds 1) $ do
+    case ssStatus ss of
+      Nothing -> do
+        sendCookieRequest
+        updateAttempt now
+      
+      Just (SessionCookieSent _) -> do
+        if ssRetryCount ss < 8
+        then sendCookieRequest >> updateAttempt now
+        else resetSession -- Failed to get cookie
+      
+      Just (SessionHandshakeSent cookie) -> do
+        if ssRetryCount ss < 8
+        then sendHandshake cookie >> updateAttempt now
+        else resetSession -- Failed to confirm handshake
+      
+      Just (SessionHandshakeAccepted cookie) -> do
+        -- Peer accepted us, but we haven't seen a data packet yet.
+        -- Keep sending handshake to make sure they get it.
+        if ssRetryCount ss < 8
+        then sendHandshake cookie >> updateAttempt now
+        else resetSession
+        
+      Just SessionConfirmed -> do
+        -- Session is live. Maintenance for reliability layer.
+        sendPacketRequests
+        -- Update stream send rate
+        modify $ \s -> s { ssStream = Stream.updateSendRate (Map.size (Reliability.rsSendWindow (ssReliability s))) now (ssStream s) }
+
+  where
+    updateAttempt now = modify $ \s -> s { ssLastAttempt = Just now, ssRetryCount = ssRetryCount s + 1 }
+    resetSession = modify $ \s -> s { ssStatus = Nothing, ssRetryCount = 0, ssLastAttempt = Nothing }
+
+-- | Send a packet request if the reliability layer detects missing packets.
+sendPacketRequests :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                   => m ()
+sendPacketRequests = do
+  ss <- get
+  case Reliability.createPacketRequest (ssReliability ss) of
+    Nothing -> return ()
+    Just pr -> do
+      now <- askTime
+      -- PacketRequest is sent as a LOSSY packet (Data ID 1)
+      case (ssSharedKey ss, ssPeerBaseNonce ss) of
+        (Just sharedKey, Just _) -> do
+          -- For lossy packets, the spec says to use 'sendbuffer buffer_end' as the second 4-byte number.
+          -- In our reliability state, that's rsNextSendSeq.
+          let nextSeq = Reliability.rsNextSendSeq (ssReliability ss)
+              Reliability.SeqNum pktNum = nextSeq
+              
+              n = ssOurBaseNonce ss
+              nonceInt = Nonce.nonceToInteger n
+              fullNonce = Nonce.integerToNonce (nonceInt + toInteger pktNum)
+              shortNonce = fromIntegral (Nonce.nonceToInteger fullNonce `mod` 65536)
+              
+              -- Payload for ReliablePacket: [Data ID 1][reconstructed request]
+              -- Reliability.put for PacketRequest already includes the ID 1.
+              prPayload = LBS.toStrict $ Binary.encode pr
+              
+              rp = Reliability.ReliablePacket
+                { Reliability.rpRecvBufferStart = Reliability.rsNextRecvSeq (ssReliability ss)
+                , Reliability.rpPacketNumber    = nextSeq
+                , Reliability.rpIsLossless      = False
+                , Reliability.rpPayload         = prPayload
+                }
+              
+              plain = Box.PlainText $ LBS.toStrict $ Binary.encode rp
+              encrypted = Box.encrypt sharedKey fullNonce plain
+              cd = CryptoDataPacket shortNonce encrypted
+              pkt = Packet PacketKind.CryptoData (LBS.toStrict $ Binary.encode cd)
+          
+          sendPacket (ssPeerNodeInfo ss) pkt
+          -- Update congestion state
+          modify $ \s -> s { ssStream = Stream.recordCongestion now (ssStream s) }
+        _ -> return ()
 \end{code}
 
 First it takes the difference between the 2 byte number on the packet and the
