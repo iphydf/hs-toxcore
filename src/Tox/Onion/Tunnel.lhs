@@ -13,17 +13,17 @@ import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary (..))
 import qualified Test.QuickCheck.Gen       as Gen
 
-import           Tox.Crypto.Box            (CipherText, PlainText (..),
+import           Tox.Crypto.Core.Box            (CipherText, PlainText (..),
                                             cipherText, decrypt, encrypt)
-import qualified Tox.Crypto.Box            as Box
-import           Tox.Crypto.Key            (CombinedKey, Nonce, PublicKey,
+import qualified Tox.Crypto.Core.Box            as Box
+import           Tox.Crypto.Core.Key            (CombinedKey, Nonce, PublicKey,
                                             SecretKey)
-import           Tox.Crypto.Keyed          (Keyed)
-import qualified Tox.Crypto.Keyed          as Keyed
-import           Tox.Crypto.KeyPair        (KeyPair (..))
-import           Tox.Network.HostAddress   (HostAddress (..))
-import           Tox.Network.PortNumber    (PortNumber (..))
-import           Tox.Network.SocketAddress (SocketAddress (..))
+import           Tox.Crypto.Core.Keyed          (Keyed)
+import qualified Tox.Crypto.Core.Keyed          as Keyed
+import           Tox.Crypto.Core.KeyPair        (KeyPair (..))
+import           Tox.Network.Core.HostAddress   (HostAddress (..))
+import           Tox.Network.Core.PortNumber    (PortNumber (..))
+import           Tox.Network.Core.SocketAddress (SocketAddress (..))
 
 
 {-------------------------------------------------------------------------------

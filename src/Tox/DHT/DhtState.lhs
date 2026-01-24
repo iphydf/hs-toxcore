@@ -20,9 +20,9 @@ import           Lens.Family2              (Lens')
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary, shrink)
 
 import           Tox.Core.Time             (Timestamp)
-import           Tox.Crypto.Key            (PublicKey)
-import           Tox.Crypto.KeyPair        (KeyPair)
-import qualified Tox.Crypto.KeyPair        as KeyPair
+import           Tox.Crypto.Core.Key            (PublicKey)
+import           Tox.Crypto.Core.KeyPair        (KeyPair)
+import qualified Tox.Crypto.Core.KeyPair        as KeyPair
 import           Tox.DHT.ClientList        (ClientList)
 import qualified Tox.DHT.ClientList        as ClientList
 import           Tox.DHT.Distance          (Distance)
@@ -32,8 +32,8 @@ import           Tox.DHT.NodeList          (NodeList)
 import qualified Tox.DHT.NodeList          as NodeList
 import           Tox.DHT.PendingReplies    (PendingReplies)
 import qualified Tox.DHT.Stamped           as Stamped
-import           Tox.Network.NodeInfo      (NodeInfo)
-import qualified Tox.Network.NodeInfo      as NodeInfo
+import           Tox.Network.Core.NodeInfo      (NodeInfo)
+import qualified Tox.Network.Core.NodeInfo      as NodeInfo
 
 
 {-------------------------------------------------------------------------------

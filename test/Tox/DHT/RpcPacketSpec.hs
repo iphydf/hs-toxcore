@@ -4,10 +4,10 @@ module Tox.DHT.RpcPacketSpec where
 
 import           Test.Hspec
 
-import           Data.Proxy               (Proxy (..))
-import           Data.Word                (Word64)
-import           Tox.DHT.RpcPacket        (RequestId (..), RpcPacket (..))
-import           Tox.Network.EncodingSpec
+import           Data.Proxy                    (Proxy (..))
+import           Data.Word                     (Word64)
+import           Tox.DHT.RpcPacket             (RequestId (..), RpcPacket (..))
+import           Tox.Network.Core.EncodingSpec
 
 
 spec :: Spec

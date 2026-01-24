@@ -1,7 +1,6 @@
 load("@rules_haskell//haskell:defs.bzl", "haskell_library")
 load("//third_party/haskell/hspec-discover:build_defs.bzl", "hspec_test")
-
-#load("//third_party/pandoc:build_defs.bzl", "pandoc_doc")
+load("//third_party/pandoc:build_defs.bzl", "pandoc_doc")
 load("//tools/project:build_defs.bzl", "project")
 
 project(
@@ -113,7 +112,7 @@ haskell_library(
 haskell_library(
     name = "hs-toxcore",
     srcs = [
-        "src/Tox.lhs",
+        "src/Tox/Toxcore.lhs",
     ],
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
@@ -172,13 +171,13 @@ haskell_library(
 haskell_library(
     name = "tox-crypto",
     srcs = [
-        "src/Tox/Crypto.lhs",
-        "src/Tox/Crypto/Box.lhs",
-        "src/Tox/Crypto/CombinedKey.lhs",
-        "src/Tox/Crypto/Key.lhs",
-        "src/Tox/Crypto/KeyPair.lhs",
-        "src/Tox/Crypto/Keyed.hs",
-        "src/Tox/Crypto/Nonce.lhs",
+        "src/Tox/Crypto/Core.lhs",
+        "src/Tox/Crypto/Core/Box.lhs",
+        "src/Tox/Crypto/Core/CombinedKey.lhs",
+        "src/Tox/Crypto/Core/Key.lhs",
+        "src/Tox/Crypto/Core/KeyPair.lhs",
+        "src/Tox/Crypto/Core/Keyed.hs",
+        "src/Tox/Crypto/Core/Nonce.lhs",
     ],
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
@@ -206,20 +205,20 @@ haskell_library(
 haskell_library(
     name = "tox-network",
     srcs = [
-        "src/Tox/Network.lhs",
-        "src/Tox/Network/Backend.lhs",
-        "src/Tox/Network/Encoding.hs",
-        "src/Tox/Network/HostAddress.lhs",
-        "src/Tox/Network/MonadRandomBytes.hs",
-        "src/Tox/Network/Networked.hs",
-        "src/Tox/Network/NodeInfo.lhs",
-        "src/Tox/Network/Packet.lhs",
-        "src/Tox/Network/PacketKind.lhs",
-        "src/Tox/Network/PortNumber.lhs",
-        "src/Tox/Network/Protocol.lhs",
-        "src/Tox/Network/SocketAddress.lhs",
-        "src/Tox/Network/TimedT.hs",
-        "src/Tox/Network/TransportProtocol.lhs",
+        "src/Tox/Network/Core.lhs",
+        "src/Tox/Network/Core/Backend.lhs",
+        "src/Tox/Network/Core/Encoding.hs",
+        "src/Tox/Network/Core/HostAddress.lhs",
+        "src/Tox/Network/Core/MonadRandomBytes.hs",
+        "src/Tox/Network/Core/Networked.hs",
+        "src/Tox/Network/Core/NodeInfo.lhs",
+        "src/Tox/Network/Core/Packet.lhs",
+        "src/Tox/Network/Core/PacketKind.lhs",
+        "src/Tox/Network/Core/PortNumber.lhs",
+        "src/Tox/Network/Core/Protocol.lhs",
+        "src/Tox/Network/Core/SocketAddress.lhs",
+        "src/Tox/Network/Core/TimedT.hs",
+        "src/Tox/Network/Core/TransportProtocol.lhs",
     ],
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
@@ -250,7 +249,7 @@ haskell_library(
 haskell_library(
     name = "tox-crypto-keyed",
     srcs = [
-        "src/Tox/Crypto/KeyedT.hs",
+        "src/Tox/Crypto/Keyed.hs",
     ],
     ghcopts = ["-j4"],
     src_strip_prefix = "src",
@@ -411,15 +410,16 @@ haskell_library(
     ],
 )
 
-# pandoc_doc(
-#     name = "tox-spec",
-#     src = "src/Tox.lhs",
-#     out = "tox-spec.md",
-#     data = glob([
-#         "src/**/*.lhs",
-#         "test/**/*.lhs",
-#     ]),
-# )
+pandoc_doc(
+    name = "tox-spec",
+    src = "src/Tox/Toxcore.lhs",
+    out = "tox-spec.md",
+    data = glob([
+        "src/**/*.lhs",
+        "test/**/*.lhs",
+    ]),
+    title = "The Tox Reference",
+)
 
 hspec_test(
     name = "testsuite",

@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tox.Persistence.FriendSpec (spec) where
 
-import           Data.Proxy               (Proxy (..))
+import           Data.Proxy                    (Proxy (..))
 import           Test.Hspec
-import           Tox.Network.EncodingSpec (binarySpec)
-import           Tox.Persistence.Friend   (Friend)
+import           Tox.Network.Core.EncodingSpec (binarySpec)
+import           Tox.Persistence.Friend        (Friend)
 
 spec :: Spec
 spec = do

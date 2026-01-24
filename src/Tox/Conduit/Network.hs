@@ -2,21 +2,21 @@
 {-# LANGUAGE RankNTypes       #-}
 module Tox.Conduit.Network where
 
-import           Control.Monad                 (void)
-import           Control.Monad.IO.Class        (MonadIO, liftIO)
-import           Data.Binary                   (Binary)
-import qualified Data.ByteString               as BS
-import           Data.Conduit                  (ConduitT, await, yield)
-import qualified Data.Conduit.List             as CL
-import qualified Network.Socket                as Socket
-import qualified Network.Socket.ByteString     as SocketBS
+import           Control.Monad                      (void)
+import           Control.Monad.IO.Class             (MonadIO, liftIO)
+import           Data.Binary                        (Binary)
+import qualified Data.ByteString                    as BS
+import           Data.Conduit                       (ConduitT, await, yield)
+import qualified Data.Conduit.List                  as CL
+import qualified Network.Socket                     as Socket
+import qualified Network.Socket.ByteString          as SocketBS
 
-import           Tox.Network.HostAddress       (HostAddress (..))
-import           Tox.Network.NodeInfo          (NodeInfo (..))
-import           Tox.Network.Packet            (Packet (..))
-import           Tox.Network.PortNumber        (PortNumber (..))
-import           Tox.Network.SocketAddress     (SocketAddress (..))
-import           Tox.Network.TransportProtocol (TransportProtocol (..))
+import           Tox.Network.Core.HostAddress       (HostAddress (..))
+import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
+import           Tox.Network.Core.Packet            (Packet (..))
+import           Tox.Network.Core.PortNumber        (PortNumber (..))
+import           Tox.Network.Core.SocketAddress     (SocketAddress (..))
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
 
 -- | Convert Tox 'SocketAddress' to 'Socket.SockAddr'.
 toSockAddr :: SocketAddress -> Socket.SockAddr

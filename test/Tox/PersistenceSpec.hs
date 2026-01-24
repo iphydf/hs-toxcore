@@ -4,12 +4,12 @@ module Tox.PersistenceSpec where
 
 import           Test.Hspec
 
-import qualified Data.Binary              as Binary (get)
-import qualified Data.Binary.Get          as Binary (Get)
-import           Data.Proxy               (Proxy (..))
-import qualified Tox.Network.EncodingSpec as EncodingSpec (expectDecoderFail)
-import           Tox.Network.EncodingSpec (binarySpec)
-import           Tox.Persistence          (SaveData)
+import qualified Data.Binary                   as Binary (get)
+import qualified Data.Binary.Get               as Binary (Get)
+import           Data.Proxy                    (Proxy (..))
+import qualified Tox.Network.Core.EncodingSpec as EncodingSpec (expectDecoderFail)
+import           Tox.Network.Core.EncodingSpec (binarySpec)
+import           Tox.Persistence               (SaveData)
 
 
 spec :: Spec

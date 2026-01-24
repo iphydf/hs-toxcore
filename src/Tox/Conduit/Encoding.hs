@@ -2,20 +2,20 @@
 {-# LANGUAGE RankNTypes       #-}
 module Tox.Conduit.Encoding where
 
-import           Control.Monad          (forever)
-import           Control.Monad.IO.Class (MonadIO, liftIO)
-import           Data.Binary            (Binary, get, put)
-import           Data.Binary.Get        (getRemainingLazyByteString,
-                                         runGetOrFail)
-import           Data.Binary.Put        (putByteString, runPut)
-import qualified Data.ByteString        as BS
-import qualified Data.ByteString.Lazy   as LBS
-import           Data.Conduit           (ConduitT, await, yield)
-import qualified Network.Socket         as Socket
+import           Control.Monad             (forever)
+import           Control.Monad.IO.Class    (MonadIO, liftIO)
+import           Data.Binary               (Binary, get, put)
+import           Data.Binary.Get           (getRemainingLazyByteString,
+                                            runGetOrFail)
+import           Data.Binary.Put           (putByteString, runPut)
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.Lazy      as LBS
+import           Data.Conduit              (ConduitT, await, yield)
+import qualified Network.Socket            as Socket
 
-import           Tox.Conduit.Network    (toSockAddr)
-import           Tox.Network.NodeInfo   (NodeInfo (..))
-import           Tox.Network.Packet     (Packet (..))
+import           Tox.Conduit.Network       (toSockAddr)
+import           Tox.Network.Core.NodeInfo (NodeInfo (..))
+import           Tox.Network.Core.Packet   (Packet (..))
 
 -- | Decodes raw UDP packets into Tox packets, keeping the sender's address.
 decodePacket :: MonadIO m

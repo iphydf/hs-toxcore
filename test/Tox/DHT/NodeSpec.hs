@@ -5,30 +5,30 @@ module Tox.DHT.NodeSpec (spec) where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Control.Monad.Identity (runIdentity)
-import           Control.Monad.Random   (evalRandT)
-import           Control.Monad.State    (runStateT)
-import           Data.Binary            (Binary, encode)
-import qualified Data.ByteString        as BS
-import qualified Data.ByteString.Lazy   as LBS
-import           Data.List              (isInfixOf)
-import qualified Data.Map               as Map
+import           Control.Monad.Identity      (runIdentity)
+import           Control.Monad.Random        (evalRandT)
+import           Control.Monad.State         (runStateT)
+import           Data.Binary                 (Binary, encode)
+import qualified Data.ByteString             as BS
+import qualified Data.ByteString.Lazy        as LBS
+import           Data.List                   (isInfixOf)
+import qualified Data.Map                    as Map
 
 import           Tox.Core.Time
-import qualified Tox.Crypto.KeyedT      as KeyedT
-import qualified Tox.Crypto.KeyPair     as KP
-import qualified Tox.DHT.DhtPacket      as DhtPacket
-import           Tox.DHT.DhtState       as DhtState
+import qualified Tox.Crypto.Core.KeyPair     as KP
+import qualified Tox.Crypto.Keyed            as KeyedT
+import qualified Tox.DHT.DhtPacket           as DhtPacket
+import           Tox.DHT.DhtState            as DhtState
 import           Tox.DHT.Node
 import           Tox.DHT.Operation
-import qualified Tox.DHT.PingPacket     as Ping
+import qualified Tox.DHT.PingPacket          as Ping
 import           Tox.DHT.RpcPacket
-import qualified Tox.Network.Encoding   as Encoding
-import qualified Tox.Network.Networked  as Networked
-import           Tox.Network.NodeInfo
-import           Tox.Network.Packet
-import           Tox.Network.PacketKind as PacketKind
-import qualified Tox.Network.TimedT     as TimedT
+import qualified Tox.Network.Core.Encoding   as Encoding
+import qualified Tox.Network.Core.Networked  as Networked
+import           Tox.Network.Core.NodeInfo
+import           Tox.Network.Core.Packet
+import           Tox.Network.Core.PacketKind as PacketKind
+import qualified Tox.Network.Core.TimedT     as TimedT
 
 spec :: Spec
 spec = do

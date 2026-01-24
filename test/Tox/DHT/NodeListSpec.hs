@@ -4,11 +4,11 @@ module Tox.DHT.NodeListSpec (spec) where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Tox.Core.Time        (Timestamp)
-import qualified Tox.DHT.ClientList   as ClientList
+import           Tox.Core.Time             (Timestamp)
+import qualified Tox.DHT.ClientList        as ClientList
 import           Tox.DHT.NodeList
-import qualified Tox.Network.NodeInfo as NodeInfo
-import           Tox.Network.NodeInfo (NodeInfo (..))
+import qualified Tox.Network.Core.NodeInfo as NodeInfo
+import           Tox.Network.Core.NodeInfo (NodeInfo (..))
 
 spec :: Spec
 spec = do

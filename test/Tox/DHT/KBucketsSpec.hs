@@ -7,19 +7,19 @@ module Tox.DHT.KBucketsSpec where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Control.Monad            (unless, when)
-import           Data.List                (sortOn)
-import qualified Data.Map                 as Map
-import           Data.Proxy               (Proxy (..))
-import           Tox.Crypto.Key           (PublicKey)
-import qualified Tox.DHT.ClientList       as ClientList
-import qualified Tox.DHT.Distance         as Distance
-import qualified Tox.DHT.KBuckets         as KBuckets
-import           Tox.DHT.KBuckets         (KBuckets)
-import qualified Tox.DHT.NodeList         as NodeList
-import           Tox.Network.EncodingSpec
-import qualified Tox.Network.NodeInfo     as NodeInfo
-import           Tox.Network.NodeInfo     (NodeInfo)
+import           Control.Monad                 (unless, when)
+import           Data.List                     (sortOn)
+import qualified Data.Map                      as Map
+import           Data.Proxy                    (Proxy (..))
+import           Tox.Crypto.Core.Key           (PublicKey)
+import qualified Tox.DHT.ClientList            as ClientList
+import qualified Tox.DHT.Distance              as Distance
+import qualified Tox.DHT.KBuckets              as KBuckets
+import           Tox.DHT.KBuckets              (KBuckets)
+import qualified Tox.DHT.NodeList              as NodeList
+import           Tox.Network.Core.EncodingSpec
+import qualified Tox.Network.Core.NodeInfo     as NodeInfo
+import           Tox.Network.Core.NodeInfo     (NodeInfo)
 
 
 makeInputKey :: Int -> Char -> PublicKey

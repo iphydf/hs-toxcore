@@ -21,7 +21,7 @@ import           Data.Word                  (Word16, Word32, Word8)
 import           GHC.Generics               (Generic)
 import           Test.QuickCheck.Arbitrary  (Arbitrary (..), genericShrink)
 import qualified Test.QuickCheck.Arbitrary  as Arbitrary
-import           Tox.Crypto.Key             (PublicKey, Signature)
+import           Tox.Crypto.Core.Key             (PublicKey, Signature)
 
 \end{code}
 

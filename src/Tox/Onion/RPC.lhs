@@ -9,9 +9,9 @@ import           Data.Word                 (Word64, Word8)
 import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary (..))
 
-import           Tox.Crypto.Box               (CipherText)
-import           Tox.Crypto.Key               (Nonce, PublicKey)
-import           Tox.Network.NodeInfo         (NodeInfo)
+import           Tox.Crypto.Core.Box               (CipherText)
+import           Tox.Crypto.Core.Key               (Nonce, PublicKey)
+import           Tox.Network.Core.NodeInfo         (NodeInfo)
 
 
 {-------------------------------------------------------------------------------

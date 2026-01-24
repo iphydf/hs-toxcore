@@ -8,65 +8,67 @@
 {-# LANGUAGE UndecidableInstances       #-}
 module Main where
 
-import           Control.Concurrent            (forkIO, threadDelay)
-import           Control.Monad                 (forM, forever, void, when)
-import           Control.Monad.IO.Class        (MonadIO, liftIO)
-import           Control.Monad.Reader          (MonadReader, ReaderT, ask,
-                                                runReaderT)
-import           Control.Monad.State           (MonadState (..))
-import           Control.Monad.Trans           (lift)
-import           Control.Monad.Trans.Resource  (runResourceT)
-import           Data.Aeson                    (FromJSON, decode, parseJSON,
-                                                withObject, (.:), (.:?))
-import qualified Data.Binary                   as Binary
-import           Data.Binary.Get               (runGetOrFail)
-import qualified Data.ByteString               as BS
-import qualified Data.ByteString.Base16        as Base16
-import qualified Data.ByteString.Char8         as BS8
-import qualified Data.ByteString.Lazy          as LBS
-import           Data.Conduit                  (ConduitT, await, awaitForever,
-                                                runConduit, yield, (.|))
-import qualified Data.Conduit.List             as CL
-import           Data.IORef                    (IORef, newIORef, readIORef,
-                                                writeIORef)
-import qualified Data.IP                       as IP
-import           Data.Maybe                    (catMaybes)
-import           GHC.Generics                  (Generic)
-import           Network.HTTP.Simple           (getResponseBody, httpLBS,
-                                                parseRequest)
-import qualified Network.Socket                as Socket
-import           System.IO                     (BufferMode (..), hSetBuffering,
-                                                stdout)
-import           Text.Read                     (readMaybe)
+import           Control.Concurrent                 (forkIO, threadDelay)
+import           Control.Monad                      (forM, forever, void, when)
+import           Control.Monad.IO.Class             (MonadIO, liftIO)
+import           Control.Monad.Reader               (MonadReader, ReaderT, ask,
+                                                     runReaderT)
+import           Control.Monad.State                (MonadState (..))
+import           Control.Monad.Trans                (lift)
+import           Control.Monad.Trans.Resource       (runResourceT)
+import           Data.Aeson                         (FromJSON, decode,
+                                                     parseJSON, withObject,
+                                                     (.:), (.:?))
+import qualified Data.Binary                        as Binary
+import           Data.Binary.Get                    (runGetOrFail)
+import qualified Data.ByteString                    as BS
+import qualified Data.ByteString.Base16             as Base16
+import qualified Data.ByteString.Char8              as BS8
+import qualified Data.ByteString.Lazy               as LBS
+import           Data.Conduit                       (ConduitT, await,
+                                                     awaitForever, runConduit,
+                                                     yield, (.|))
+import qualified Data.Conduit.List                  as CL
+import           Data.IORef                         (IORef, newIORef, readIORef,
+                                                     writeIORef)
+import qualified Data.IP                            as IP
+import           Data.Maybe                         (catMaybes)
+import           GHC.Generics                       (Generic)
+import           Network.HTTP.Simple                (getResponseBody, httpLBS,
+                                                     parseRequest)
+import qualified Network.Socket                     as Socket
+import           System.IO                          (BufferMode (..),
+                                                     hSetBuffering, stdout)
+import           Text.Read                          (readMaybe)
 
-import qualified Crypto.Saltine.Class          as Sodium
-import qualified Data.Map                      as Map
-import           Tox.Conduit.DHT               (DhtConduit (..),
-                                                dhtBootstrapFrom,
-                                                dhtMaintenanceLoop,
-                                                dhtPacketHandler)
-import           Tox.Conduit.Encoding          (decodePacket, encodePacket)
-import           Tox.Conduit.Network           (fromSockAddr, udpSink,
-                                                udpSource)
-import           Tox.Core.Time                 (getTime)
-import           Tox.Core.Timed                (Timed (..))
-import qualified Tox.Crypto.Key                as Key
-import           Tox.Crypto.Key                (PublicKey)
-import           Tox.Crypto.Keyed              (Keyed (..))
-import           Tox.Crypto.KeyedT             (KeyedT, evalKeyedT)
-import           Tox.DHT.DhtPacket             (DhtPacket (..))
-import qualified Tox.DHT.DhtState              as DhtState
-import           Tox.DHT.DhtState              (DhtState)
-import           Tox.DHT.Operation             (DhtNodeMonad, initDht)
-import           Tox.Network.HostAddress       (HostAddress (..))
-import           Tox.Network.MonadRandomBytes  (MonadRandomBytes (..))
-import           Tox.Network.Networked         (Networked (..))
-import           Tox.Network.NodeInfo          (NodeInfo (..))
-import           Tox.Network.Packet            (Packet (..))
-import           Tox.Network.PortNumber        (PortNumber (..))
-import           Tox.Network.SocketAddress     (SocketAddress (..))
-import           Tox.Network.TimedT            (runTimedT)
-import           Tox.Network.TransportProtocol (TransportProtocol (..))
+import qualified Crypto.Saltine.Class               as Sodium
+import qualified Data.Map                           as Map
+import           Tox.Conduit.DHT                    (DhtConduit (..),
+                                                     dhtBootstrapFrom,
+                                                     dhtMaintenanceLoop,
+                                                     dhtPacketHandler)
+import           Tox.Conduit.Encoding               (decodePacket, encodePacket)
+import           Tox.Conduit.Network                (fromSockAddr, udpSink,
+                                                     udpSource)
+import           Tox.Core.Time                      (getTime)
+import           Tox.Core.Timed                     (Timed (..))
+import qualified Tox.Crypto.Core.Key                as Key
+import           Tox.Crypto.Core.Key                (PublicKey)
+import           Tox.Crypto.Core.Keyed              (Keyed (..))
+import           Tox.Crypto.Keyed                   (KeyedT, evalKeyedT)
+import           Tox.DHT.DhtPacket                  (DhtPacket (..))
+import qualified Tox.DHT.DhtState                   as DhtState
+import           Tox.DHT.DhtState                   (DhtState)
+import           Tox.DHT.Operation                  (DhtNodeMonad, initDht)
+import           Tox.Network.Core.HostAddress       (HostAddress (..))
+import           Tox.Network.Core.MonadRandomBytes  (MonadRandomBytes (..))
+import           Tox.Network.Core.Networked         (Networked (..))
+import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
+import           Tox.Network.Core.Packet            (Packet (..))
+import           Tox.Network.Core.PortNumber        (PortNumber (..))
+import           Tox.Network.Core.SocketAddress     (SocketAddress (..))
+import           Tox.Network.Core.TimedT            (runTimedT)
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
 
 data ToxNodeJSON = ToxNodeJSON
     { jsonIpv4      :: Maybe String

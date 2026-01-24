@@ -5,7 +5,7 @@ module Tox.DHT.ClientNode where
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
 
 import           Tox.Core.Time             (Timestamp)
-import           Tox.Network.NodeInfo      (NodeInfo)
+import           Tox.Network.Core.NodeInfo      (NodeInfo)
 
 
 {-------------------------------------------------------------------------------

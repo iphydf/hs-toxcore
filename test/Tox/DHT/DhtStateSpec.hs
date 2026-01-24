@@ -5,18 +5,18 @@ module Tox.DHT.DhtStateSpec where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Control.Monad            (unless, when)
-import           Data.List                (nub, sort)
-import           Data.Proxy               (Proxy (..))
-import qualified Data.Set                 as Set
+import           Control.Monad                 (unless, when)
+import           Data.List                     (nub, sort)
+import           Data.Proxy                    (Proxy (..))
+import qualified Data.Set                      as Set
 
-import qualified Tox.Crypto.KeyPair       as KeyPair
-import qualified Tox.DHT.DhtState         as DhtState
-import           Tox.DHT.DhtState         (DhtState)
-import qualified Tox.DHT.Distance         as Distance
-import qualified Tox.DHT.NodeList         as NodeList
-import           Tox.Network.EncodingSpec
-import qualified Tox.Network.NodeInfo     as NodeInfo
+import qualified Tox.Crypto.Core.KeyPair       as KeyPair
+import qualified Tox.DHT.DhtState              as DhtState
+import           Tox.DHT.DhtState              (DhtState)
+import qualified Tox.DHT.Distance              as Distance
+import qualified Tox.DHT.NodeList              as NodeList
+import           Tox.Network.Core.EncodingSpec
+import qualified Tox.Network.Core.NodeInfo     as NodeInfo
 
 
 spec :: Spec

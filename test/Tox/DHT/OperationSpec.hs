@@ -6,27 +6,27 @@ module Tox.DHT.OperationSpec where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Control.Monad          (when)
-import           Control.Monad.Identity (runIdentity)
-import           Control.Monad.Random   (evalRandT)
-import           Control.Monad.State    (runStateT)
-import           Control.Monad.Writer   (execWriterT)
-import           Data.List              (isInfixOf)
-import qualified Data.Map               as Map
+import           Control.Monad              (when)
+import           Control.Monad.Identity     (runIdentity)
+import           Control.Monad.Random       (evalRandT)
+import           Control.Monad.State        (runStateT)
+import           Control.Monad.Writer       (execWriterT)
+import           Data.List                  (isInfixOf)
+import qualified Data.Map                   as Map
 
-import qualified Tox.Core.Time          as Time
-import qualified Tox.Crypto.KeyedT      as KeyedT
-import qualified Tox.Crypto.KeyPair     as KeyPair
-import qualified Tox.DHT.DhtState       as DhtState
-import           Tox.DHT.NodesResponse  (NodesResponse (..))
-import qualified Tox.DHT.Operation      as Operation
-import           Tox.DHT.PingPacket     (PingPacket (..))
-import           Tox.DHT.RpcPacket      (RequestId (..), RpcPacket (..))
-import qualified Tox.DHT.Stamped        as Stamped
-import qualified Tox.Network.Networked  as Networked
-import qualified Tox.Network.NodeInfo   as NodeInfo
-import           Tox.Network.NodeInfo   (NodeInfo)
-import qualified Tox.Network.TimedT     as TimedT
+import qualified Tox.Core.Time              as Time
+import qualified Tox.Crypto.Core.KeyPair    as KeyPair
+import qualified Tox.Crypto.Keyed           as KeyedT
+import qualified Tox.DHT.DhtState           as DhtState
+import           Tox.DHT.NodesResponse      (NodesResponse (..))
+import qualified Tox.DHT.Operation          as Operation
+import           Tox.DHT.PingPacket         (PingPacket (..))
+import           Tox.DHT.RpcPacket          (RequestId (..), RpcPacket (..))
+import qualified Tox.DHT.Stamped            as Stamped
+import qualified Tox.Network.Core.Networked as Networked
+import qualified Tox.Network.Core.NodeInfo  as NodeInfo
+import           Tox.Network.Core.NodeInfo  (NodeInfo)
+import qualified Tox.Network.Core.TimedT    as TimedT
 
 spec :: Spec
 spec = do

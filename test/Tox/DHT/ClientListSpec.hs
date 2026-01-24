@@ -5,15 +5,15 @@ module Tox.DHT.ClientListSpec where
 import           Test.Hspec
 import           Test.QuickCheck
 
-import           Control.Monad            (unless)
-import           Data.List                (sortOn)
-import qualified Data.Map                 as Map
-import           Data.Proxy               (Proxy (..))
-import qualified Tox.DHT.ClientList       as ClientList
-import           Tox.DHT.ClientList       (ClientList)
-import qualified Tox.DHT.Distance         as Distance
-import           Tox.Network.EncodingSpec
-import qualified Tox.Network.NodeInfo     as NodeInfo
+import           Control.Monad                 (unless)
+import           Data.List                     (sortOn)
+import qualified Data.Map                      as Map
+import           Data.Proxy                    (Proxy (..))
+import qualified Tox.DHT.ClientList            as ClientList
+import           Tox.DHT.ClientList            (ClientList)
+import qualified Tox.DHT.Distance              as Distance
+import           Tox.Network.Core.EncodingSpec
+import qualified Tox.Network.Core.NodeInfo     as NodeInfo
 
 
 spec :: Spec

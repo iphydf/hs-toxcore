@@ -3,23 +3,23 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Tox.DHT.Node where
 
-import           Control.Monad.State      (gets)
-import           Data.Binary              (Binary)
-import qualified Data.ByteString          as BS
-import           Data.Foldable            (forM_)
-import           Tox.DHT.DhtPacket        as DhtPacket
-import           Tox.DHT.DhtRequestPacket (DhtRequestPacket)
-import           Tox.DHT.DhtState         as DhtState
-import           Tox.DHT.Operation        (DhtNodeMonad, bootstrapNode, doDHT,
-                                           handleDhtRequestPacket,
-                                           handleNodesRequest,
-                                           handleNodesResponse,
-                                           handlePingRequest,
-                                           handlePingResponse)
-import qualified Tox.Network.Encoding     as Encoding
-import           Tox.Network.NodeInfo     (NodeInfo (..))
-import           Tox.Network.Packet       (Packet (..))
-import           Tox.Network.PacketKind   as PacketKind
+import           Control.Monad.State         (gets)
+import           Data.Binary                 (Binary)
+import qualified Data.ByteString             as BS
+import           Data.Foldable               (forM_)
+import           Tox.DHT.DhtPacket           as DhtPacket
+import           Tox.DHT.DhtRequestPacket    (DhtRequestPacket)
+import           Tox.DHT.DhtState            as DhtState
+import           Tox.DHT.Operation           (DhtNodeMonad, bootstrapNode,
+                                              doDHT, handleDhtRequestPacket,
+                                              handleNodesRequest,
+                                              handleNodesResponse,
+                                              handlePingRequest,
+                                              handlePingResponse)
+import qualified Tox.Network.Core.Encoding   as Encoding
+import           Tox.Network.Core.NodeInfo   (NodeInfo (..))
+import           Tox.Network.Core.Packet     (Packet (..))
+import           Tox.Network.Core.PacketKind as PacketKind
 
 -- | A unified packet handler for DHT protocol packets.
 -- Decrypts the DHT envelope and dispatches to the appropriate handler.

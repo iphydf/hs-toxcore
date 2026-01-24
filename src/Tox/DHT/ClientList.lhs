@@ -15,13 +15,13 @@ import           Test.QuickCheck.Gen       (Gen)
 import qualified Test.QuickCheck.Gen       as Gen
 
 import           Tox.Core.Time             (Timestamp)
-import           Tox.Crypto.Key            (PublicKey)
+import           Tox.Crypto.Core.Key            (PublicKey)
 import           Tox.DHT.ClientNode        (ClientNode)
 import qualified Tox.DHT.ClientNode        as ClientNode
 import           Tox.DHT.Distance          (Distance)
 import qualified Tox.DHT.Distance          as Distance
-import           Tox.Network.NodeInfo      (NodeInfo)
-import qualified Tox.Network.NodeInfo      as NodeInfo
+import           Tox.Network.Core.NodeInfo      (NodeInfo)
+import qualified Tox.Network.Core.NodeInfo      as NodeInfo
 
 
 {-------------------------------------------------------------------------------

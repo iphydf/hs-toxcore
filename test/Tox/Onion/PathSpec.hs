@@ -7,35 +7,36 @@ import           Test.Hspec
 import           Test.Hspec.QuickCheck
 import           Test.QuickCheck
 
-import           Control.Monad.Identity        (Identity, runIdentity)
-import           Control.Monad.Random          (RandT, evalRandT)
-import           Control.Monad.State           (MonadState, StateT, runStateT)
-import qualified Data.ByteString               as BS
-import qualified Data.Map                      as Map
-import           Data.Maybe                    (isJust, isNothing)
-import           System.Random                 (StdGen, mkStdGen)
+import           Control.Monad.Identity             (Identity, runIdentity)
+import           Control.Monad.Random               (RandT, evalRandT)
+import           Control.Monad.State                (MonadState, StateT,
+                                                     runStateT)
+import qualified Data.ByteString                    as BS
+import qualified Data.Map                           as Map
+import           Data.Maybe                         (isJust, isNothing)
+import           System.Random                      (StdGen, mkStdGen)
 
-import qualified Tox.Core.Time                 as Time
-import           Tox.Core.Time                 (Timestamp)
-import           Tox.Core.Timed                (Timed (..))
-import           Tox.Crypto.Box                (CipherText)
-import           Tox.Crypto.Key                (Nonce)
-import           Tox.Crypto.Keyed              (Keyed (..), NullKeyed (..),
-                                                runNullKeyed)
-import           Tox.Crypto.KeyedT             (KeyedT, evalKeyedT)
-import qualified Tox.Crypto.KeyPair            as KeyPair
-import           Tox.Crypto.KeyPair            (KeyPair (..))
-import           Tox.Network.HostAddress       (HostAddress (..))
-import           Tox.Network.MonadRandomBytes  (MonadRandomBytes (..))
-import qualified Tox.Network.NodeInfo          as NodeInfo
-import           Tox.Network.NodeInfo          (NodeInfo (..))
-import           Tox.Network.PortNumber        (PortNumber (..))
-import           Tox.Network.SocketAddress     (SocketAddress (..))
-import           Tox.Network.TimedT            (TimedT, runTimedT)
-import           Tox.Network.TransportProtocol (TransportProtocol (..))
+import qualified Tox.Core.Time                      as Time
+import           Tox.Core.Time                      (Timestamp)
+import           Tox.Core.Timed                     (Timed (..))
+import           Tox.Crypto.Core.Box                (CipherText)
+import           Tox.Crypto.Core.Key                (Nonce)
+import           Tox.Crypto.Core.Keyed              (Keyed (..), NullKeyed (..),
+                                                     runNullKeyed)
+import qualified Tox.Crypto.Core.KeyPair            as KeyPair
+import           Tox.Crypto.Core.KeyPair            (KeyPair (..))
+import           Tox.Crypto.Keyed                   (KeyedT, evalKeyedT)
+import           Tox.Network.Core.HostAddress       (HostAddress (..))
+import           Tox.Network.Core.MonadRandomBytes  (MonadRandomBytes (..))
+import qualified Tox.Network.Core.NodeInfo          as NodeInfo
+import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
+import           Tox.Network.Core.PortNumber        (PortNumber (..))
+import           Tox.Network.Core.SocketAddress     (SocketAddress (..))
+import           Tox.Network.Core.TimedT            (TimedT, runTimedT)
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
 
 import           Tox.Onion.Path
-import qualified Tox.Onion.Tunnel              as Tunnel
+import qualified Tox.Onion.Tunnel                   as Tunnel
 
 -- | A test monad for OnionPath logic.
 newtype TestOnionMonad a = TestOnionMonad { unTestOnionMonad :: KeyedT (TimedT (RandT StdGen (StateT OnionPathState Identity))) a }

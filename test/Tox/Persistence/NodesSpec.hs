@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Tox.Persistence.NodesSpec (spec) where
 
-import           Data.Proxy               (Proxy (..))
+import           Data.Proxy                    (Proxy (..))
 import           Test.Hspec
-import           Tox.Network.EncodingSpec (binarySpec)
-import           Tox.Persistence.Nodes    (Nodes)
+import           Tox.Network.Core.EncodingSpec (binarySpec)
+import           Tox.Persistence.Nodes         (Nodes)
 
 spec :: Spec
 spec = do

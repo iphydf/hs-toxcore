@@ -4,9 +4,9 @@ module Tox.DHT.NodesResponseSpec where
 
 import           Test.Hspec
 
-import           Data.Proxy               (Proxy (..))
-import           Tox.DHT.NodesResponse    (NodesResponse)
-import           Tox.Network.EncodingSpec
+import           Data.Proxy                    (Proxy (..))
+import           Tox.DHT.NodesResponse         (NodesResponse)
+import           Tox.Network.Core.EncodingSpec
 
 
 spec :: Spec

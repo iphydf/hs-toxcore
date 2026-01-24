@@ -24,7 +24,7 @@ import           Data.MessagePack          (MessagePack)
 import           Data.Typeable             (Typeable)
 import           GHC.Generics              (Generic)
 
-import           Tox.Crypto.Key            (PublicKey)
+import           Tox.Crypto.Core.Key            (PublicKey)
 import           Tox.DHT.DhtPacket         (DhtPacket)
 
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)

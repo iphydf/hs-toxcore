@@ -15,20 +15,20 @@ import           Test.QuickCheck.Arbitrary (Arbitrary (..))
 import           Tox.Core.Time                (TimeDiff, Timestamp)
 import qualified Tox.Core.Time                as Time
 import           Tox.Core.Timed               (Timed, askTime)
-import           Tox.Crypto.Box               (CipherText)
-import qualified Tox.Crypto.Box               as Box
-import           Tox.Crypto.Key               (Nonce)
-import           Tox.Crypto.Keyed             (Keyed)
-import qualified Tox.Crypto.Keyed             as Keyed
-import           Tox.Crypto.KeyPair           (KeyPair(..))
+import           Tox.Crypto.Core.Box               (CipherText)
+import qualified Tox.Crypto.Core.Box               as Box
+import           Tox.Crypto.Core.Key               (Nonce)
+import           Tox.Crypto.Core.Keyed             (Keyed)
+import qualified Tox.Crypto.Core.Keyed             as Keyed
+import           Tox.Crypto.Core.KeyPair           (KeyPair(..))
 import qualified Tox.DHT.DhtState             as DhtState
 import qualified Tox.DHT.NodeList             as NodeList
-import           Tox.Network.MonadRandomBytes (MonadRandomBytes, newKeyPair,
+import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes, newKeyPair,
                                                uniform)
-import qualified Tox.Network.MonadRandomBytes as MonadRandomBytes (uniformSafe)
-import           Tox.Network.NodeInfo         (NodeInfo)
-import qualified Tox.Network.NodeInfo         as NodeInfo
-import           Tox.Network.SocketAddress    (SocketAddress)
+import qualified Tox.Network.Core.MonadRandomBytes as MonadRandomBytes (uniformSafe)
+import           Tox.Network.Core.NodeInfo         (NodeInfo)
+import qualified Tox.Network.Core.NodeInfo         as NodeInfo
+import           Tox.Network.Core.SocketAddress    (SocketAddress)
 import qualified Tox.Onion.Tunnel             as Tunnel
 
 

@@ -4,10 +4,10 @@ module Tox.DHT.NodesRequestSpec where
 
 import           Test.Hspec
 
-import           Data.Proxy               (Proxy (..))
-import qualified Tox.Crypto.KeyPair       as KeyPair
-import           Tox.DHT.NodesRequest     (NodesRequest (..))
-import           Tox.Network.EncodingSpec
+import           Data.Proxy                    (Proxy (..))
+import qualified Tox.Crypto.Core.KeyPair       as KeyPair
+import           Tox.DHT.NodesRequest          (NodesRequest (..))
+import           Tox.Network.Core.EncodingSpec
 
 
 spec :: Spec

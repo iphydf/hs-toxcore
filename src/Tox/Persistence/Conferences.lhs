@@ -16,7 +16,7 @@ import           Data.MessagePack          (MessagePack)
 import           Data.Word                 (Word16, Word32, Word64, Word8)
 import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary (..), genericShrink)
-import           Tox.Crypto.Key            (PublicKey)
+import           Tox.Crypto.Core.Key            (PublicKey)
 import qualified Tox.Persistence.Util      as Util
 
 \end{code}

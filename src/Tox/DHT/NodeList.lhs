@@ -11,13 +11,13 @@ import           Data.Maybe           (listToMaybe)
 import           Data.Monoid          (Dual (..), Endo (..), appEndo, getDual)
 
 import           Tox.Core.Time        (Timestamp)
-import           Tox.Crypto.Key       (PublicKey)
+import           Tox.Crypto.Core.Key       (PublicKey)
 import           Tox.DHT.ClientList   (ClientList)
 import qualified Tox.DHT.ClientList   as ClientList
 import           Tox.DHT.Distance     (Distance)
 import           Tox.DHT.KBuckets     (KBuckets)
 import qualified Tox.DHT.KBuckets     as KBuckets
-import           Tox.Network.NodeInfo (NodeInfo)
+import           Tox.Network.Core.NodeInfo (NodeInfo)
 
 class NodeList l where
   addNode :: Timestamp -> NodeInfo -> l -> l
