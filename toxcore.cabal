@@ -45,11 +45,12 @@ library
     Tox.Crypto.Core
     Tox.Crypto.Core.Box
     Tox.Crypto.Core.CombinedKey
+    Tox.Crypto.Core.Hash
     Tox.Crypto.Core.Key
     Tox.Crypto.Core.KeyPair
     Tox.Crypto.Core.Keyed
+    Tox.Crypto.Core.MonadRandomBytes
     Tox.Crypto.Core.Nonce
-    Tox.Crypto.Keyed
     Tox.DHT
     Tox.DHT.ClientList
     Tox.DHT.ClientNode
@@ -71,7 +72,6 @@ library
     Tox.Network.Core.Backend
     Tox.Network.Core.Encoding
     Tox.Network.Core.HostAddress
-    Tox.Network.Core.MonadRandomBytes
     Tox.Network.Core.Networked
     Tox.Network.Core.NodeInfo
     Tox.Network.Core.Packet
@@ -101,6 +101,7 @@ library
     Tox.Toxcore
     Tox.Transport.Reliability
     Tox.Transport.SecureSession
+    Tox.Transport.SecureSession.Manager
     Tox.Transport.Stream
 
   build-depends:
@@ -181,6 +182,7 @@ test-suite testsuite
     Tox.Crypto.Core.CombinedKeySpec
     Tox.Crypto.Core.KeyPairSpec
     Tox.Crypto.Core.KeySpec
+    Tox.Crypto.Core.MonadRandomBytesSpec
     Tox.Crypto.Core.NonceSpec
     Tox.Crypto.CoreSpec
     Tox.DHT.ClientListSpec
@@ -202,7 +204,6 @@ test-suite testsuite
     Tox.DHTSpec
     Tox.Network.Core.EncodingSpec
     Tox.Network.Core.HostAddressSpec
-    Tox.Network.Core.MonadRandomBytesSpec
     Tox.Network.Core.NodeInfoSpec
     Tox.Network.Core.PacketKindSpec
     Tox.Network.Core.PacketSpec
@@ -220,6 +221,7 @@ test-suite testsuite
     Tox.Persistence.GroupsSpec
     Tox.Persistence.NodesSpec
     Tox.PersistenceSpec
+    Tox.Transport.SecureSessionSpec
 
   build-tool-depends: hspec-discover:hspec-discover
   build-depends:
@@ -227,6 +229,7 @@ test-suite testsuite
     , base            <5
     , binary
     , bytestring
+    , clock
     , containers
     , hspec
     , monad-validate

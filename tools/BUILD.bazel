@@ -55,7 +55,6 @@ haskell_binary(
         "//hs-toxcore:tox-conduit",
         "//hs-toxcore:tox-core",
         "//hs-toxcore:tox-crypto",
-        "//hs-toxcore:tox-crypto-keyed",
         "//hs-toxcore:tox-dht",
         "//hs-toxcore:tox-network",
         "//third_party/haskell:aeson",

@@ -20,8 +20,7 @@ module Tox.Crypto.Core.Nonce where
 
 import qualified Crypto.Saltine.Class    as Sodium (decode, encode, nudge)
 import qualified Crypto.Saltine.Core.Box as Sodium (newNonce)
-import qualified Data.ByteString         as ByteString
-
+import qualified Data.ByteString         as BS
 import           Tox.Crypto.Core.Key
 
 
@@ -31,7 +30,7 @@ newNonce = Key <$> Sodium.newNonce
 
 reverseNonce :: Nonce -> Nonce
 reverseNonce (Key nonce) =
-  let Just reversed = Sodium.decode $ ByteString.reverse $ Sodium.encode nonce in
+  let Just reversed = Sodium.decode $ BS.reverse $ Sodium.encode nonce in
   Key reversed
 
 
@@ -43,5 +42,21 @@ nudge =
 increment :: Nonce -> Nonce
 increment =
   reverseNonce . nudge . reverseNonce
+
+nonceToInteger :: Nonce -> Integer
+nonceToInteger (Key nonce) =
+  BS.foldl' (\acc b -> acc * 256 + fromIntegral b) 0 (Sodium.encode nonce)
+
+nonceLimit :: Integer
+nonceLimit = 256 ^ (24 :: Int)
+
+integerToNonce :: Integer -> Nonce
+integerToNonce n =
+  let bs = BS.pack . reverse . take 24 . (++ repeat 0) . reverse $ toBytes (n `mod` nonceLimit)
+      Just nonce = Sodium.decode bs
+  in Key nonce
+  where
+    toBytes 0 = []
+    toBytes x = fromIntegral (x `rem` 256) : toBytes (x `quot` 256)
 
 \end{code}

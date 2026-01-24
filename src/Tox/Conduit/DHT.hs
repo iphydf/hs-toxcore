@@ -7,26 +7,26 @@
 {-# LANGUAGE UndecidableInstances       #-}
 module Tox.Conduit.DHT where
 
-import           Control.Monad                     (forever)
-import           Control.Monad.IO.Class            (MonadIO)
-import           Control.Monad.State               (MonadState (..))
-import           Control.Monad.Trans               (MonadTrans, lift)
-import           Data.Binary                       (Binary)
-import qualified Data.ByteString                   as BS
-import           Data.Conduit                      (ConduitT, await, yield)
+import           Control.Monad                    (forever)
+import           Control.Monad.IO.Class           (MonadIO)
+import           Control.Monad.State              (MonadState (..))
+import           Control.Monad.Trans              (MonadTrans, lift)
+import           Data.Binary                      (Binary)
+import qualified Data.ByteString                  as BS
+import           Data.Conduit                     (ConduitT, await, yield)
 
-import           Tox.Core.Timed                    (Timed (..))
-import           Tox.Crypto.Core.Keyed             (Keyed (..))
-import           Tox.DHT.DhtState                  (DhtState)
-import           Tox.DHT.Node                      (handleBootstrap,
-                                                    handleIncomingPacket,
-                                                    handleMaintenance)
-import           Tox.DHT.Operation                 (DhtNodeMonad)
-import qualified Tox.Network.Core.Encoding         as Encoding
-import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes (..))
-import           Tox.Network.Core.Networked        (Networked (..))
-import           Tox.Network.Core.NodeInfo         (NodeInfo)
-import           Tox.Network.Core.Packet           (Packet (..))
+import           Tox.Core.Timed                   (Timed (..))
+import           Tox.Crypto.Core.Keyed            (Keyed (..))
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes (..))
+import           Tox.DHT.DhtState                 (DhtState)
+import           Tox.DHT.Node                     (handleBootstrap,
+                                                   handleIncomingPacket,
+                                                   handleMaintenance)
+import           Tox.DHT.Operation                (DhtNodeMonad)
+import qualified Tox.Network.Core.Encoding        as Encoding
+import           Tox.Network.Core.Networked       (Networked (..))
+import           Tox.Network.Core.NodeInfo        (NodeInfo)
+import           Tox.Network.Core.Packet          (Packet (..))
 
 -- | A wrapper around 'ConduitT' to provide the necessary instances for DHT logic
 -- without requiring orphan instances.

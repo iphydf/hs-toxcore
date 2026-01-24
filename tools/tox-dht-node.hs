@@ -54,14 +54,15 @@ import           Tox.Core.Time                      (getTime)
 import           Tox.Core.Timed                     (Timed (..))
 import qualified Tox.Crypto.Core.Key                as Key
 import           Tox.Crypto.Core.Key                (PublicKey)
-import           Tox.Crypto.Core.Keyed              (Keyed (..))
-import           Tox.Crypto.Keyed                   (KeyedT, evalKeyedT)
+import           Tox.Crypto.Core.Keyed              (Keyed (..), KeyedT,
+                                                     evalKeyedT)
+import           Tox.Crypto.Core.MonadRandomBytes   (MonadRandomBytes (..))
 import           Tox.DHT.DhtPacket                  (DhtPacket (..))
 import qualified Tox.DHT.DhtState                   as DhtState
 import           Tox.DHT.DhtState                   (DhtState)
 import           Tox.DHT.Operation                  (DhtNodeMonad, initDht)
 import           Tox.Network.Core.HostAddress       (HostAddress (..))
-import           Tox.Network.Core.MonadRandomBytes  (MonadRandomBytes (..))
+
 import           Tox.Network.Core.Networked         (Networked (..))
 import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
 import           Tox.Network.Core.Packet            (Packet (..))

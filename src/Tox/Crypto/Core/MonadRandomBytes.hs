@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData          #-}
 
-module Tox.Network.Core.MonadRandomBytes where
+module Tox.Crypto.Core.MonadRandomBytes where
 
 import           Control.Monad.Random      (RandT, getRandoms)
 import           Control.Monad.Reader      (ReaderT)
