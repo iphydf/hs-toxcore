@@ -1,11 +1,11 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Tox.Network.Core.MonadRandomBytesSpec (spec) where
+module Tox.Crypto.Core.MonadRandomBytesSpec (spec) where
 
 import           Test.Hspec
 import           Test.QuickCheck
 
 import           Control.Monad.Random         (evalRand, mkStdGen)
-import           Tox.Network.Core.MonadRandomBytes
+import           Tox.Crypto.Core.MonadRandomBytes
 
 spec :: Spec
 spec = do

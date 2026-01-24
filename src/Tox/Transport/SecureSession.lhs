@@ -1,6 +1,44 @@
 \begin{code}
-{-# LANGUAGE StrictData #-}
+{-# LANGUAGE DeriveGeneric      #-}
+{-# LANGUAGE FlexibleContexts   #-}
+{-# LANGUAGE StrictData         #-}
+{-# LANGUAGE OverloadedStrings  #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Tox.Transport.SecureSession where
+
+import           Control.Monad.State            (MonadState, get, gets, modify)
+import           Data.Binary               (Binary)
+import qualified Data.Binary               as Binary
+import qualified Data.Binary.Get           as Get
+import qualified Data.Binary.Put           as Put
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.Lazy      as LBS
+import           Data.Word                 (Word64, Word16)
+import           Data.Int                  (Int16)
+import           GHC.Generics              (Generic)
+
+import           Tox.Crypto.Core.Key            (PublicKey, Nonce, CombinedKey, Key(..), unKey)
+import           Tox.Crypto.Core.KeyPair        (KeyPair(..))
+import qualified Tox.Crypto.Core.KeyPair        as KeyPair
+import           Tox.Crypto.Core.Box            (CipherText)
+import qualified Tox.Crypto.Core.Box            as Box
+import qualified Tox.Crypto.Core.Nonce          as Nonce
+import qualified Tox.Crypto.Core.Hash           as Hash
+import           Tox.Crypto.Core.Keyed          (Keyed(..))
+import           Tox.Core.Time                  (Timestamp(..), timestampToMicroseconds)
+import qualified Tox.Core.Time                  as Time
+import           Tox.Core.Timed                 (Timed(..))
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes (..), randomNonce, randomWord64)
+import qualified Tox.Network.Core.PacketKind       as PacketKind
+import           Tox.Network.Core.Packet           (Packet (..))
+import           Tox.Network.Core.NodeInfo         (NodeInfo(..))
+import qualified Tox.Network.Core.NodeInfo         as NodeInfo
+import           Tox.Network.Core.Networked        (Networked (..))
+import           Tox.Network.Core.TransportProtocol (TransportProtocol(UDP))
+
+import qualified System.Clock                  as Clock
+import qualified Crypto.Saltine.Class          as Sodium
 \end{code}
 
 \chapter{Net crypto}
@@ -80,6 +118,36 @@ cookie request packet (145 bytes):
 Encrypted message is encrypted with sender's DHT private key, receiver's DHT
 public key and the nonce.
 
+\begin{code}
+-- | Cookie Request Packet (0x18 / 24).
+data CookieRequest = CookieRequest
+  { crSenderDhtPk      :: PublicKey
+  , crNonce            :: Nonce
+  , crEncryptedMessage :: CipherText -- ^ Decrypts to crInnerMessage
+  } deriving (Eq, Show, Generic)
+
+instance Binary CookieRequest where
+  put cr = do
+    Binary.put $ crSenderDhtPk cr
+    Binary.put $ crNonce cr
+    Binary.put $ crEncryptedMessage cr
+  get = CookieRequest <$> Binary.get <*> Binary.get <*> Binary.get
+
+-- | Inner message of a Cookie Request.
+data CookieRequestInner = CookieRequestInner
+  { criSenderRealPk :: PublicKey
+  , criPadding      :: BS.ByteString -- ^ 32 bytes
+  , criEchoId       :: Word64
+  } deriving (Eq, Show, Generic)
+
+instance Binary CookieRequestInner where
+  put cri = do
+    Binary.put $ criSenderRealPk cri
+    Put.putByteString $ criPadding cri
+    Put.putWord64be $ criEchoId cri
+  get = CookieRequestInner <$> Binary.get <*> Get.getByteString 32 <*> Get.getWord64be
+\end{code}
+
 The packet id for cookie request packets is 24.  The request contains the DHT
 public key of the sender which is the key used (The DHT private key) (along
 with the DHT public key of the receiver) to encrypt the encrypted part of the
@@ -110,6 +178,32 @@ cookie response packet (161 bytes):
 Encrypted message is encrypted with the exact same symmetric key as the cookie
 request packet it responds to but with a different nonce.
 
+\begin{code}
+-- | Cookie Response Packet (0x19 / 25).
+data CookieResponse = CookieResponse
+  { rsNonce            :: Nonce
+  , rsEncryptedMessage :: CipherText -- ^ Decrypts to rsInnerMessage
+  } deriving (Eq, Show, Generic)
+
+instance Binary CookieResponse where
+  put rs = do
+    Binary.put $ rsNonce rs
+    Binary.put $ rsEncryptedMessage rs
+  get = CookieResponse <$> Binary.get <*> Binary.get
+
+-- | Inner message of a Cookie Response.
+data CookieResponseInner = CookieResponseInner
+  { rsiCookie :: Cookie
+  , rsiEchoId :: Word64
+  } deriving (Eq, Show, Generic)
+
+instance Binary CookieResponseInner where
+  put rsi = do
+    Binary.put $ rsiCookie rsi
+    Put.putWord64be $ rsiEchoId rsi
+  get = CookieResponseInner <$> Binary.get <*> Get.getWord64be
+\end{code}
+
 The packet id for cookie request packets is 25.  The response contains a nonce
 and an encrypted part encrypted with the nonce.  The encrypted part is
 encrypted with the same key used to decrypt the encrypted part of the request
@@ -135,6 +229,34 @@ requester as part of the cookie response packet.  A peer who wants to connect
 to another must obtain a cookie packet from the peer they are trying to connect
 to.  The only way to send a valid handshake packet to another peer is to first
 obtain a cookie from them.
+
+\begin{code}
+-- | Cookie structure (112 bytes).
+data Cookie = Cookie
+  { cookieNonce            :: Nonce
+  , cookieEncryptedPayload :: CipherText -- ^ Decrypts to cookieInner
+  } deriving (Eq, Show, Generic)
+
+instance Binary Cookie where
+  put c = do
+    Binary.put $ cookieNonce c
+    Binary.put $ cookieEncryptedPayload c
+  get = Cookie <$> Binary.get <*> Binary.get
+
+-- | Inner payload of a Cookie.
+data CookieInner = CookieInner
+  { ciTime        :: Word64
+  , ciSenderRealPk :: PublicKey
+  , ciSenderDhtPk  :: PublicKey
+  } deriving (Eq, Show, Generic)
+
+instance Binary CookieInner where
+  put ci = do
+    Put.putWord64be $ ciTime ci
+    Binary.put $ ciSenderRealPk ci
+    Binary.put $ ciSenderDhtPk ci
+  get = CookieInner <$> Get.getWord64be <*> Binary.get <*> Binary.get
+\end{code}
 
 The cookie contains information that will both prove to the receiver of the
 handshake that the peer has received a cookie response and contains encrypted
@@ -175,6 +297,38 @@ Handshake packet:
     [Other Cookie (used by the other to respond to the handshake packet)]
 ]
 \end{verbatim}
+
+\begin{code}
+-- | Handshake Packet (0x1a / 26).
+data Handshake = Handshake
+  { hCookie          :: Cookie
+  , hNonce           :: Nonce
+  , hEncryptedMessage :: CipherText -- ^ Decrypts to hInnerMessage
+  } deriving (Eq, Show, Generic)
+
+instance Binary Handshake where
+  put h = do
+    Binary.put $ hCookie h
+    Binary.put $ hNonce h
+    Binary.put $ hEncryptedMessage h
+  get = Handshake <$> Binary.get <*> Binary.get <*> Binary.get
+
+-- | Inner message of a Handshake.
+data HandshakeInner = HandshakeInner
+  { hiBaseNonce   :: Nonce
+  , hiSessionPk   :: PublicKey
+  , hiCookieHash  :: BS.ByteString -- ^ 64 bytes (SHA512)
+  , hiOtherCookie :: Cookie
+  } deriving (Eq, Show, Generic)
+
+instance Binary HandshakeInner where
+  put hi = do
+    Binary.put $ hiBaseNonce hi
+    Binary.put $ hiSessionPk hi
+    Put.putByteString $ hiCookieHash hi
+    Binary.put $ hiOtherCookie hi
+  get = HandshakeInner <$> Binary.get <*> Binary.get <*> Get.getByteString 64 <*> Binary.get
+\end{code}
 
 The packet id for handshake packets is 26.  The cookie is a cookie obtained by
 sending a cookie request packet to the peer and getting a cookie response
@@ -310,6 +464,20 @@ Encrypted packets:
   variable           & Payload \\
 \end{tabular}
 
+\begin{code}
+-- | Encrypted Packet (0x1b / 27).
+data CryptoDataPacket = CryptoDataPacket
+  { cdNonceShort :: Word16 -- ^ Last 2 bytes of the nonce
+  , cdPayload    :: CipherText
+  } deriving (Eq, Show, Generic)
+
+instance Binary CryptoDataPacket where
+  put cd = do
+    Put.putWord16be $ cdNonceShort cd
+    Binary.put $ cdPayload cd
+  get = CryptoDataPacket <$> Get.getWord16be <*> Binary.get
+\end{code}
+
 The payload is encrypted with the session key and 'base nonce' set by the
 receiver in their handshake + packet number (starting at 0, big endian math).
 
@@ -357,6 +525,315 @@ Toxcore uses the following method to calculate the nonce for each packet:
       \item \texttt{saved\_base\_nonce = saved\_base\_nonce + DATA\_NUM\_THRESHOLD}
     \end{itemize}
 \end{enumerate}
+
+\begin{code}
+{-------------------------------------------------------------------------------
+ -
+ - :: State Definitions.
+ -
+ ------------------------------------------------------------------------------}
+
+data HandshakeStatus
+  = SessionCookieSent Word64 -- ^ Echo ID
+  | SessionHandshakeSent Cookie
+  | SessionHandshakeAccepted Cookie -- ^ Received handshake from peer
+  | SessionConfirmed -- ^ Received data packet, session established
+  deriving (Eq, Show, Generic)
+
+data SecureSessionState = SecureSessionState
+  { ssOurRealKeyPair      :: KeyPair
+  , ssPeerRealPk          :: PublicKey
+  , ssOurDhtKeyPair       :: KeyPair
+  , ssPeerDhtPk           :: PublicKey
+  , ssPeerNodeInfo        :: NodeInfo
+  , ssStatus              :: Maybe HandshakeStatus
+  , ssOurSessionKeyPair   :: KeyPair
+  , ssPeerSessionPk       :: Maybe PublicKey
+  , ssSharedKey           :: Maybe CombinedKey
+  , ssOurBaseNonce        :: Nonce
+  , ssPeerBaseNonce       :: Maybe Nonce
+  , ssSentPackets         :: Word64
+  , ssRecvPackets         :: Word64
+  , ssLastAttempt         :: Maybe Timestamp
+  , ssRetryCount          :: Int
+  } deriving (Eq, Show, Generic)
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Cookie Logic.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Create a Cookie for a peer.
+createCookie :: MonadRandomBytes m => CombinedKey -> Word64 -> PublicKey -> PublicKey -> m Cookie
+createCookie cookieKey time peerRealPk peerDhtPk = do
+  nonce <- randomNonce
+  let inner = CookieInner time peerRealPk peerDhtPk
+      plain = Box.encode inner
+      encrypted = Box.encrypt cookieKey nonce plain
+  return $ Cookie nonce encrypted
+
+-- | Decrypt and validate a Cookie.
+decryptCookie :: CombinedKey -> Cookie -> Maybe CookieInner
+decryptCookie cookieKey (Cookie nonce encrypted) =
+  Box.decrypt cookieKey nonce encrypted >>= Box.decode
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: CryptoData Packet Logic.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Threshold for base nonce rotation (1/3 of 65536).
+dataNumThreshold :: Word16
+dataNumThreshold = 21845
+
+-- | Calculate the full nonce for a received packet.
+calculateNonce :: Nonce -> Word16 -> Nonce
+calculateNonce baseNonce shortNonce =
+  let
+    n = Nonce.nonceToInteger baseNonce
+    baseShort = fromIntegral (n `mod` 65536)
+    diff = shortNonce - baseShort
+    -- treat diff as signed 16-bit to handle wrap around
+    n' = n + fromIntegral (fromIntegral diff :: Int16)
+  in
+    Nonce.integerToNonce n'
+
+-- | Update the base nonce after successful decryption if necessary.
+updateBaseNonce :: Nonce -> Word16 -> Nonce
+updateBaseNonce baseNonce shortNonce =
+  let
+    n = Nonce.nonceToInteger baseNonce
+    baseShort = fromIntegral (n `mod` 65536)
+    diff = shortNonce - baseShort
+  in
+    if diff > dataNumThreshold * 2
+    then Nonce.integerToNonce (n + fromIntegral dataNumThreshold)
+    else baseNonce
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Cryptographic Helpers.
+ -
+ ------------------------------------------------------------------------------}
+
+getDhtSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
+getDhtSharedKey ss = getCombinedKey (KeyPair.secretKey $ ssOurDhtKeyPair ss) (ssPeerDhtPk ss)
+
+getRealSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
+getRealSharedKey ss = getCombinedKey (KeyPair.secretKey $ ssOurRealKeyPair ss) (ssPeerRealPk ss)
+
+getSessionSharedKey :: Keyed m => SecureSessionState -> m CombinedKey
+getSessionSharedKey ss = case ssPeerSessionPk ss of
+  Nothing -> error "getSessionSharedKey: peer session pk not set"
+  Just pk -> getCombinedKey (KeyPair.secretKey $ ssOurSessionKeyPair ss) pk
+
+
+{-------------------------------------------------------------------------------
+ -
+ - :: Session Handlers.
+ -
+ ------------------------------------------------------------------------------}
+
+-- | Initial state for a new session.
+-- | Initial state for a new session.
+initSession :: MonadRandomBytes m => KeyPair -> PublicKey -> KeyPair -> PublicKey -> NodeInfo -> m SecureSessionState
+initSession ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
+  ourSessionKp <- newKeyPair
+  ourBaseNonce <- randomNonce
+  return SecureSessionState
+    { ssOurRealKeyPair    = ourRealKp
+    , ssPeerRealPk        = peerRealPk
+    , ssOurDhtKeyPair     = ourDhtKp
+    , ssPeerDhtPk         = peerDhtPk
+    , ssPeerNodeInfo      = peerNode
+    , ssStatus            = Nothing
+    , ssOurSessionKeyPair = ourSessionKp
+    , ssPeerSessionPk     = Nothing
+    , ssSharedKey         = Nothing
+    , ssOurBaseNonce      = ourBaseNonce
+    , ssPeerBaseNonce     = Nothing
+    , ssSentPackets       = 0
+    , ssRecvPackets       = 0
+    , ssLastAttempt       = Nothing
+    , ssRetryCount        = 0
+    }
+
+sendCookieRequest :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                  => m ()
+sendCookieRequest = do
+  ss <- get
+  nonce <- randomNonce
+  echoId <- randomWord64
+  dhtSharedKey <- getDhtSharedKey ss
+  
+  let cri = CookieRequestInner (KeyPair.publicKey $ ssOurRealKeyPair ss) (BS.replicate 32 0) echoId
+      plain = Box.encode cri
+      encrypted = Box.encrypt dhtSharedKey nonce plain
+      cr = CookieRequest (KeyPair.publicKey $ ssOurDhtKeyPair ss) nonce encrypted
+      pkt = Packet PacketKind.CookieRequest (LBS.toStrict $ Binary.encode cr)
+  
+  sendPacket (ssPeerNodeInfo ss) pkt
+  modify $ \s -> s { ssStatus = Just (SessionCookieSent echoId) }
+
+-- | Handle an incoming packet for this session.
+handlePacket :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadState SecureSessionState m)
+             => CombinedKey -> NodeInfo -> Packet BS.ByteString -> m ()
+handlePacket ck from (Packet kind payload) = case kind of
+  PacketKind.CookieResponse -> handleCookieResponse from payload
+  PacketKind.CryptoHandshake -> handleHandshake ck from payload
+  PacketKind.CryptoData -> handleCryptoData from payload
+  _ -> return ()
+
+-- | Handle a CookieRequest (Server side).
+handleCookieRequest :: (Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                    => CombinedKey -> KeyPair -> NodeInfo -> BS.ByteString -> m ()
+handleCookieRequest cookieKey ourDhtKp from payload = do
+  case Box.decode (Box.PlainText payload) of
+    Nothing -> return ()
+    Just (cr :: CookieRequest) -> do
+      now <- askTime
+      let timeInt = timestampToMicroseconds now
+      
+      sharedKey <- getCombinedKey (KeyPair.secretKey ourDhtKp) (crSenderDhtPk cr)
+      case Box.decrypt sharedKey (crNonce cr) (crEncryptedMessage cr) of
+        Nothing -> return ()
+        Just plain -> case Box.decode plain of
+          Nothing -> return ()
+          Just (cri :: CookieRequestInner) -> do
+            cookie <- createCookie cookieKey timeInt (criSenderRealPk cri) (crSenderDhtPk cr)
+            nonce <- randomNonce
+            
+            let rsi = CookieResponseInner cookie (criEchoId cri)
+                plainR = Box.encode rsi
+                encryptedR = Box.encrypt sharedKey nonce plainR
+                rs = CookieResponse nonce encryptedR
+                pkt = Packet PacketKind.CookieResponse (LBS.toStrict $ Binary.encode rs)
+            
+            sendPacket from pkt
+
+handleCookieResponse :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                     => NodeInfo -> BS.ByteString -> m ()
+handleCookieResponse _from payload = do
+  ss <- get
+  case Box.decode (Box.PlainText payload) of
+    Nothing -> return ()
+    Just (rs :: CookieResponse) -> do
+      sharedKey <- getDhtSharedKey ss
+      case Box.decrypt sharedKey (rsNonce rs) (rsEncryptedMessage rs) of
+        Nothing -> return ()
+        Just plain -> case Box.decode plain of
+          Nothing -> return ()
+          Just (rsi :: CookieResponseInner) -> do
+            case ssStatus ss of
+              Just (SessionCookieSent echoId) | echoId == rsiEchoId rsi -> do
+                modify $ \s -> s { ssStatus = Just (SessionHandshakeSent (rsiCookie rsi)) }
+                sendHandshake (rsiCookie rsi)
+              _ -> return ()
+
+sendHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+              => Cookie -> m ()
+sendHandshake cookie = do
+  ss <- get
+  nonce <- randomNonce
+  realSharedKey <- getRealSharedKey ss
+  
+  let cookieBytes = LBS.toStrict $ Binary.encode cookie
+      cookieHash = Hash.hash cookieBytes
+      hi = HandshakeInner (ssOurBaseNonce ss) (KeyPair.publicKey $ ssOurSessionKeyPair ss) cookieHash cookie -- FIXME: hiOtherCookie
+      plain = Box.encode hi
+      encrypted = Box.encrypt realSharedKey nonce plain
+      h = Handshake cookie nonce encrypted
+      pkt = Packet PacketKind.CryptoHandshake (LBS.toStrict $ Binary.encode h)
+
+  sendPacket (ssPeerNodeInfo ss) pkt
+
+handleHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                => CombinedKey -> NodeInfo -> BS.ByteString -> m ()
+handleHandshake cookieK from payload = do
+  ss <- get
+  case Box.decode (Box.PlainText payload) of
+    Nothing -> return ()
+    Just (h :: Handshake) -> do
+      -- 1. Validate our Cookie
+      now <- askTime
+      case decryptCookie cookieK (hCookie h) of
+        Nothing -> return () -- Not our cookie
+        Just ci -> do
+          let ciTimestamp = Timestamp $ Clock.TimeSpec (fromIntegral $ ciTime ci `div` 1000000) (fromIntegral $ (ciTime ci `mod` 1000000) * 1000)
+              age = now `Time.diffTime` ciTimestamp
+          
+          if age > Time.seconds 15
+          then return () -- Expired
+          else do
+            -- 2. Decrypt Handshake
+            realSharedKey <- getRealSharedKey ss
+            case Box.decrypt realSharedKey (hNonce h) (hEncryptedMessage h) of
+              Nothing -> return ()
+              Just plain -> case Box.decode plain of
+                Nothing -> return ()
+                Just (hi :: HandshakeInner) -> do
+                  -- Mobility: update peer address if it changed
+                  modify $ \s -> s { ssPeerNodeInfo = from }
+                  
+                  sharedKey <- getCombinedKey (KeyPair.secretKey $ ssOurSessionKeyPair ss) (hiSessionPk hi)
+                  
+                  modify $ \s -> s 
+                    { ssPeerSessionPk = Just (hiSessionPk hi)
+                    , ssPeerBaseNonce = Just (hiBaseNonce hi)
+                    , ssSharedKey     = Just sharedKey
+                    , ssStatus        = Just (SessionHandshakeAccepted (hCookie h))
+                    }
+                  
+                  case ssStatus ss of
+                    Just (SessionHandshakeSent _) -> sendHandshake (hiOtherCookie hi)
+                    _ -> return ()
+
+sendCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+               => Box.PlainText -> m ()
+sendCryptoData plain = do
+  ss <- get
+  case (ssSharedKey ss, ssPeerBaseNonce ss) of
+    (Just sharedKey, Just _) -> do
+      let n = ssOurBaseNonce ss
+          nonceInt = Nonce.nonceToInteger n
+          fullNonce = Nonce.integerToNonce (nonceInt + toInteger (ssSentPackets ss))
+          shortNonce = fromIntegral (Nonce.nonceToInteger fullNonce `mod` 65536)
+          encrypted = Box.encrypt sharedKey fullNonce plain
+          cd = CryptoDataPacket shortNonce encrypted
+          pkt = Packet PacketKind.CryptoData (LBS.toStrict $ Binary.encode cd)
+      
+      sendPacket (ssPeerNodeInfo ss) pkt
+      modify $ \s -> s { ssSentPackets = ssSentPackets s + 1 }
+    _ -> return ()
+
+handleCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+                 => NodeInfo -> BS.ByteString -> m ()
+handleCryptoData from payload = do
+  ss <- get
+  case (ssSharedKey ss, ssPeerBaseNonce ss) of
+    (Just sharedKey, Just peerBaseNonce) -> do
+      case Box.decode (Box.PlainText payload) of
+        Nothing -> return ()
+        Just (cd :: CryptoDataPacket) -> do
+          let nonce = calculateNonce peerBaseNonce (cdNonceShort cd)
+          case Box.decrypt sharedKey nonce (cdPayload cd) of
+            Nothing -> return ()
+            Just _plain -> do
+              modify $ \s -> s 
+                { ssStatus = Just SessionConfirmed
+                , ssRecvPackets = ssRecvPackets s + 1
+                , ssPeerBaseNonce = Just (updateBaseNonce peerBaseNonce (cdNonceShort cd))
+                , ssPeerNodeInfo = from -- Update for mobility
+                }
+              -- TODO: pass plain upwards
+              return ()
+    _ -> return ()
+\end{code}
 
 First it takes the difference between the 2 byte number on the packet and the
 last.  Because the 3 values are unsigned 16 bit ints and rollover is part of

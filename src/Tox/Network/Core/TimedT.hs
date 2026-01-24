@@ -13,7 +13,7 @@ import           Control.Monad.Writer         (MonadWriter)
 import           Tox.Core.Time                (Timestamp)
 import           Tox.Core.Timed               (Timed (..))
 import           Tox.Crypto.Core.Keyed             (Keyed)
-import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes)
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes)
 import           Tox.Network.Core.Networked        (Networked)
 
 newtype TimedT m a = TimedT (ReaderT Timestamp m a)

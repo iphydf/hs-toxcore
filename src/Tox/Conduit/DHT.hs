@@ -23,7 +23,7 @@ import           Tox.DHT.Server               (handleBootstrap,
                                                handleIncomingPacket,
                                                handleMaintenance)
 import qualified Tox.Network.Core.Encoding         as Encoding
-import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes (..))
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes (..))
 import           Tox.Network.Core.Networked        (Networked (..))
 import           Tox.Network.Core.NodeInfo         (NodeInfo)
 import           Tox.Network.Core.Packet           (Packet (..))

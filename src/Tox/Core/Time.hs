@@ -1,6 +1,7 @@
 {-# LANGUAGE StrictData #-}
 module Tox.Core.Time where
 
+import           Data.Word                 (Word64)
 import qualified System.Clock              as Clock
 import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
 
@@ -13,12 +14,16 @@ import           Test.QuickCheck.Arbitrary (Arbitrary, arbitrary)
 newtype Timestamp = Timestamp Clock.TimeSpec
   deriving (Eq, Ord, Show, Read)
 
+timestampToMicroseconds :: Timestamp -> Word64
+timestampToMicroseconds (Timestamp ts) =
+  (fromIntegral (Clock.sec ts) * 1000000) + (fromIntegral (Clock.nsec ts) `div` 1000)
+
 newtype TimeDiff = TimeDiff Clock.TimeSpec
   deriving (Eq, Ord, Show, Read)
 
 instance Num TimeDiff where
-  TimeDiff t + TimeDiff t' = TimeDiff $ t Prelude.+ t'
-  TimeDiff t - TimeDiff t' = TimeDiff $ t Prelude.- t'
+  TimeDiff t + TimeDiff t' = TimeDiff $ t + t'
+  TimeDiff t - TimeDiff t' = TimeDiff $ t - t'
   TimeDiff t * TimeDiff t' = TimeDiff $ t * t'
   negate (TimeDiff t) = TimeDiff $ negate t
   abs (TimeDiff t) = TimeDiff $ abs t
@@ -34,11 +39,11 @@ milliseconds = TimeDiff . Clock.TimeSpec 0 . (*10^(6::Integer)) . fromIntegral
 getTime :: IO Timestamp
 getTime = Timestamp <$> Clock.getTime Clock.Monotonic
 
-(-) :: Timestamp -> Timestamp -> TimeDiff
-Timestamp t - Timestamp t' = TimeDiff $ t Prelude.- t'
+diffTime :: Timestamp -> Timestamp -> TimeDiff
+diffTime (Timestamp t) (Timestamp t') = TimeDiff $ t - t'
 
-(+) :: Timestamp -> TimeDiff -> Timestamp
-Timestamp t + TimeDiff t' = Timestamp $ t Prelude.+ t'
+addTime :: Timestamp -> TimeDiff -> Timestamp
+addTime (Timestamp t) (TimeDiff t') = Timestamp $ t + t'
 
 {-------------------------------------------------------------------------------
  -

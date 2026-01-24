@@ -37,9 +37,8 @@ import qualified Tox.Core.Time                as Time
 import           Tox.Core.Timed               (Timed)
 import qualified Tox.Core.Timed               as Timed
 import           Tox.Crypto.Core.Key               (PublicKey)
-import           Tox.Crypto.Core.Keyed             (Keyed)
-import           Tox.Crypto.Keyed            (KeyedT)
-import qualified Tox.Crypto.Keyed            as KeyedT
+import           Tox.Crypto.Core.Keyed             (Keyed, KeyedT)
+import qualified Tox.Crypto.Core.Keyed             as KeyedT
 import qualified Tox.Crypto.Core.KeyPair           as KeyPair
 import           Tox.DHT.ClientList           (ClientList)
 import qualified Tox.DHT.ClientList           as ClientList
@@ -58,8 +57,8 @@ import           Tox.DHT.PingPacket           (PingPacket (..))
 import           Tox.DHT.RpcPacket            (RpcPacket (..))
 import qualified Tox.DHT.RpcPacket            as RpcPacket
 import qualified Tox.DHT.Stamped              as Stamped
-import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes)
-import qualified Tox.Network.Core.MonadRandomBytes as MonadRandomBytes
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes)
+import qualified Tox.Crypto.Core.MonadRandomBytes as MonadRandomBytes
 import           Tox.Network.Core.Networked        (Networked)
 import qualified Tox.Network.Core.Networked        as Networked
 import           Tox.Network.Core.NodeInfo         (NodeInfo)
@@ -219,7 +218,7 @@ randomRequests = do
         nodes -> do
           time <- Timed.askTime
           DhtState.ListStamp lastTime bootstrapped <- get
-          when (time Time.- lastTime >= randomRequestPeriod
+          when (time `Time.diffTime` lastTime >= randomRequestPeriod
               || bootstrapped < maxBootstrapTimes) $ do
             node <- MonadRandomBytes.uniform nodes
             tell [RequestInfo node $ NodeList.baseKey nodeList]
@@ -279,7 +278,7 @@ checkNodes = modifyM $ DhtState.traverseClientLists checkNodes'
 
         checkNode :: ClientNode -> WriterT [RequestInfo] m (Maybe ClientNode)
         checkNode clientNode = Timed.askTime >>= \time ->
-          if time Time.- lastCheck < checkPeriod
+          if time `Time.diffTime` lastCheck < checkPeriod
           then pure $ Just clientNode
           else (tell [requestInfo] $>) $
             if checkCount + 1 < maxChecks
@@ -400,9 +399,9 @@ maxPendingTime = maximum
 checkPending :: DhtNodeMonad m =>
   TimeDiff -> NodeInfo -> RpcPacket.RequestId -> m Bool
 checkPending timeLimit from requestId = do
-  oldTime <- (Time.+ negate maxPendingTime) <$> Timed.askTime
+  oldTime <- (`Time.addTime` negate maxPendingTime) <$> Timed.askTime
   DhtState._dhtPendingReplies %= Stamped.dropOlder oldTime
-  recentCutoff <- (Time.+ negate timeLimit) <$> Timed.askTime
+  recentCutoff <- (`Time.addTime` negate timeLimit) <$> Timed.askTime
   DhtState._dhtPendingReplies %%=
     PendingReplies.checkExpectedReply recentCutoff from requestId
 

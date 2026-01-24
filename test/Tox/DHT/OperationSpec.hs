@@ -15,7 +15,7 @@ import           Data.List              (isInfixOf)
 import qualified Data.Map               as Map
 
 import qualified Tox.Core.Time          as Time
-import qualified Tox.Crypto.Keyed      as KeyedT
+import qualified Tox.Crypto.Core.Keyed      as KeyedT
 import qualified Tox.Crypto.Core.KeyPair     as KeyPair
 import qualified Tox.DHT.DhtState       as DhtState
 import           Tox.DHT.NodesResponse  (NodesResponse (..))
@@ -27,6 +27,8 @@ import qualified Tox.Network.Core.Networked  as Networked
 import           Tox.Network.Core.NodeInfo   (NodeInfo)
 import qualified Tox.Network.Core.NodeInfo   as NodeInfo
 import qualified Tox.Network.Core.TimedT     as TimedT
+import qualified Tox.Network.Core.PacketKind as PacketKind
+import           Tox.Network.Core.Packet     (Packet(..))
 
 spec :: Spec
 spec = do
@@ -56,7 +58,7 @@ spec = do
         let
           dhtState       = DhtState.empty time keyPair
           afterAdd       = foldr (DhtState.addNode time) dhtState nodeInfos
-          time'          = time Time.+ Operation.randomRequestPeriod
+          time'          = time `Time.addTime` Operation.randomRequestPeriod
           randomRequests = Operation.evalTestDhtNode seed time' afterAdd
             . execWriterT $ Operation.randomRequests
         in
@@ -73,7 +75,7 @@ spec = do
           afterSearch       = DhtState.addSearchKey time publicKey dhtState
           afterAdd          = foldr (DhtState.addNode time) afterSearch nodeInfos
           nodeAddedToSearch = not $ all ((== publicKey) . NodeInfo.publicKey) nodeInfos
-          time'             = time Time.+ Operation.randomRequestPeriod
+          time'             = time `Time.addTime` Operation.randomRequestPeriod
           randomRequests    = Operation.evalTestDhtNode seed time' afterAdd
             . execWriterT $ Operation.randomRequests
 
@@ -90,7 +92,7 @@ spec = do
         let
           viable   = DhtState.viable nodeInfo dhtState
           afterAdd = DhtState.addNode time nodeInfo dhtState
-          time'    = time Time.+ Operation.checkPeriod
+          time'    = time `Time.addTime` Operation.checkPeriod
           checks   = Operation.evalTestDhtNode seed time' afterAdd
             . execWriterT $ Operation.checkNodes
         in
@@ -118,5 +120,6 @@ spec = do
               . (`TimedT.runTimedT` time)
               . (`KeyedT.evalKeyedT` Map.empty)
               $ Operation.handlePingRequest from (RpcPacket PingRequest rid)
-            isPingResponse event = ("packetKind = PingResponse" `isInfixOf` event) && (show from `isInfixOf` event)
+            isPingResponse (Networked.SendPacket to (Packet kind _)) =
+                to == from && kind == PacketKind.PingResponse
         in events `shouldSatisfy` any isPingResponse

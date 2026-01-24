@@ -23,11 +23,11 @@ import           Tox.Crypto.Core.Box               (CipherText)
 import           Tox.Crypto.Core.Key               (Nonce)
 import           Tox.Crypto.Core.Keyed             (Keyed (..), NullKeyed (..),
                                                runNullKeyed)
-import           Tox.Crypto.Keyed            (KeyedT, evalKeyedT)
+import           Tox.Crypto.Core.Keyed            (KeyedT, evalKeyedT)
 import           Tox.Crypto.Core.KeyPair           (KeyPair (..))
 import qualified Tox.Crypto.Core.KeyPair           as KeyPair
 import           Tox.Network.Core.HostAddress      (HostAddress (..))
-import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes (..))
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes (..))
 import           Tox.Network.Core.NodeInfo         (NodeInfo (..))
 import qualified Tox.Network.Core.NodeInfo         as NodeInfo
 import           Tox.Network.Core.PortNumber       (PortNumber (..))
@@ -56,18 +56,18 @@ spec :: Spec
 spec = do
   describe "isPathAlive" $ do
     it "returns True for a new path" $ property $ \((now, path) :: (Timestamp, OnionPath)) ->
-      let path' = path { pathExpires = now Time.+ pathLifetime, pathLastAttempt = Nothing }
+      let path' = path { pathExpires = now `Time.addTime` pathLifetime, pathLastAttempt = Nothing }
       in isPathAlive now path' `shouldBe` True
 
     it "returns False for an expired path" $ property $ \((now, path) :: (Timestamp, OnionPath)) ->
-      let path' = path { pathExpires = now Time.+ Time.seconds (-1) }
+      let path' = path { pathExpires = now `Time.addTime` Time.seconds (-1) }
       in isPathAlive now path' `shouldBe` False
 
     it "returns False for a timed-out unconfirmed path" $ property $ \((now, path) :: (Timestamp, OnionPath)) ->
       let path' = path
-            { pathExpires = now Time.+ pathLifetime
+            { pathExpires = now `Time.addTime` pathLifetime
             , pathConfirmed = False
-            , pathLastAttempt = Just (now Time.+ Time.seconds (-5))
+            , pathLastAttempt = Just (now `Time.addTime` Time.seconds (-5))
             , pathTries = 2
             }
       in isPathAlive now path' `shouldBe` False
@@ -80,7 +80,7 @@ spec = do
           let nodeA = NodeInfo UDP (SocketAddress (IPv4 0x7f000001) 33445) (KeyPair.publicKey kpA)
               nodeB = NodeInfo UDP (SocketAddress (IPv4 0x7f000002) 33445) (KeyPair.publicKey kpB)
               nodeC = NodeInfo UDP (SocketAddress (IPv4 0x7f000003) 33445) (KeyPair.publicKey kpC)
-              path = OnionPath [nodeA, nodeB, nodeC] [kp1, kp2, kp3] True 0 (now Time.+ pathLifetime) Nothing 0
+              path = OnionPath [nodeA, nodeB, nodeC] [kp1, kp2, kp3] True 0 (now `Time.addTime` pathLifetime) Nothing 0
               
               -- 1. Wrap
               req0 = runNullKeyed $ wrapPath ourKP path destAddr nonce finalData
@@ -115,7 +115,7 @@ spec = do
           let nodeA = NodeInfo UDP (SocketAddress (IPv4 0x7f000001) 33445) (KeyPair.publicKey kpA)
               nodeB = NodeInfo UDP (SocketAddress (IPv4 0x7f000002) 33445) (KeyPair.publicKey kpB)
               nodeC = NodeInfo UDP (SocketAddress (IPv4 0x7f000003) 33445) (KeyPair.publicKey kpC)
-              path = OnionPath [nodeA, nodeB, nodeC] [kp1, kp2, kp3] True 0 (now Time.+ pathLifetime) Nothing 0
+              path = OnionPath [nodeA, nodeB, nodeC] [kp1, kp2, kp3] True 0 (now `Time.addTime` pathLifetime) Nothing 0
               req0 = runNullKeyed $ wrapPath ourKP path destAddr nonce finalData
               
               -- Use wrong key at Node A

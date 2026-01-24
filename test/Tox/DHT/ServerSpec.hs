@@ -25,7 +25,7 @@ import qualified Tox.Crypto.Core.KeyPair as KP
 import           Tox.DHT.RpcPacket
 import qualified Tox.DHT.PingPacket as Ping
 import qualified Tox.DHT.DhtPacket as DhtPacket
-import qualified Tox.Crypto.Keyed as KeyedT
+import qualified Tox.Crypto.Core.Keyed as KeyedT
 import qualified Tox.Network.Core.TimedT as TimedT
 import qualified Tox.Network.Core.Encoding as Encoding
 import qualified Tox.Network.Core.Networked as Networked
@@ -58,4 +58,5 @@ spec = do
               . (`TimedT.runTimedT` time)
               . (`KeyedT.evalKeyedT` Map.empty)
               $ handleIncomingPacket from packet
-        in any ("packetKind = PingResponse" `isInfixOf`) events
+                in any (\(Networked.SendPacket _ (Packet kind _)) -> kind == PacketKind.PingResponse) events
+        

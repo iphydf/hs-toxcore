@@ -27,6 +27,6 @@ spec = do
       \(s1 :: Integer) (s2 :: Integer) ->
         let ts = Time.Timestamp (fromInteger s1) -- normalized via Num
             td = Time.seconds s2
-            ts_plus = ts Time.+ td
-            td_recovered = ts_plus Time.- ts
+            ts_plus = ts `Time.addTime` td
+            td_recovered = ts_plus `Time.diffTime` ts
         in td_recovered == td

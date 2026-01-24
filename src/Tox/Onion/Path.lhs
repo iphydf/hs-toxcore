@@ -2,6 +2,7 @@
 {-# LANGUAGE DeriveGeneric         #-}
 {-# LANGUAGE FlexibleContexts      #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE RecordWildCards       #-}
 {-# LANGUAGE StrictData            #-}
 module Tox.Onion.Path where
 
@@ -21,11 +22,12 @@ import           Tox.Crypto.Core.Key               (Nonce)
 import           Tox.Crypto.Core.Keyed             (Keyed)
 import qualified Tox.Crypto.Core.Keyed             as Keyed
 import           Tox.Crypto.Core.KeyPair           (KeyPair(..))
+import qualified Tox.Crypto.Core.KeyPair           as KeyPair
 import qualified Tox.DHT.DhtState             as DhtState
 import qualified Tox.DHT.NodeList             as NodeList
-import           Tox.Network.Core.MonadRandomBytes (MonadRandomBytes, newKeyPair,
+import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes, newKeyPair,
                                                uniform)
-import qualified Tox.Network.Core.MonadRandomBytes as MonadRandomBytes (uniformSafe)
+import qualified Tox.Crypto.Core.MonadRandomBytes as MonadRandomBytes (uniformSafe)
 import           Tox.Network.Core.NodeInfo         (NodeInfo)
 import qualified Tox.Network.Core.NodeInfo         as NodeInfo
 import           Tox.Network.Core.SocketAddress    (SocketAddress)
@@ -78,7 +80,7 @@ isPathAlive now path =
     Just lastTime ->
       let timeout = if pathConfirmed path then confirmedPathTimeout else unconfirmedPathTimeout
           maxTries = if pathConfirmed path then 4 else 2
-      in now Time.- lastTime < timeout || pathTries path < maxTries
+      in now `Time.diffTime` lastTime < timeout || pathTries path < maxTries
 
 
 data OnionPathState = OnionPathState
@@ -103,9 +105,10 @@ maintainPaths :: OnionPathMonad m => [NodeInfo] -> m ()
 maintainPaths nodes = do
   now <- askTime
   -- Filter out expired or failed paths
-  modify $ \s -> s
-    { announcePaths = filter (isPathAlive now) (announcePaths s)
-    , searchPaths   = filter (isPathAlive now) (searchPaths s)
+  modify $ \OnionPathState{..} -> OnionPathState
+    { announcePaths = filter (isPathAlive now) announcePaths
+    , searchPaths   = filter (isPathAlive now) searchPaths
+    , ..
     }
 
   -- Fill up announce paths
@@ -114,8 +117,12 @@ maintainPaths nodes = do
     pNodes <- pickNodes nodes
     unless (null pNodes) $ do
       pNum <- gets lastPathNum
-      p <- createPath pNodes (pNum + 1) (now Time.+ pathLifetime)
-      modify $ \s -> s { announcePaths = p : announcePaths s, lastPathNum = pNum + 1 }
+      p <- createPath pNodes (pNum + 1) (now `Time.addTime` pathLifetime)
+      modify $ \OnionPathState{..} -> OnionPathState
+        { announcePaths = p : announcePaths
+        , lastPathNum = pNum + 1
+        , ..
+        }
 
   -- Fill up search paths
   numSearch <- gets (length . searchPaths)
@@ -123,10 +130,13 @@ maintainPaths nodes = do
     pNodes <- pickNodes nodes
     unless (null pNodes) $ do
       pNum <- gets lastPathNum
-      p <- createPath pNodes (pNum + 1) (now Time.+ pathLifetime)
-      modify $ \s -> s { searchPaths = p : searchPaths s, lastPathNum = pNum + 1 }
-
-
+      p <- createPath pNodes (pNum + 1) (now `Time.addTime` pathLifetime)
+      modify $ \OnionPathState{..} -> OnionPathState
+        { searchPaths = p : searchPaths
+        , lastPathNum = pNum + 1
+        , ..
+        }
+    
 -- | Select a random path for sending.
 selectPath :: OnionPathMonad m => Bool -> m (Maybe OnionPath)
 selectPath forAnnounce = do
@@ -156,19 +166,19 @@ wrapPath ourKeyPair path destAddr nonce innerData =
     ([nodeA, nodeB, nodeC], [kp1, kp2, kp3]) -> do
       -- Layer 3: Encrypted with kp2 (SK2) for Node C (nodeC)
       -- Decrypted by C to find D and the final payload.
-      let p3 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort destAddr) (publicKey kp3) innerData
-      combined3 <- Keyed.getCombinedKey (secretKey kp2) (NodeInfo.publicKey nodeC)
+      let p3 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort destAddr) (KeyPair.publicKey kp3) innerData
+      combined3 <- Keyed.getCombinedKey (KeyPair.secretKey kp2) (NodeInfo.publicKey nodeC)
       let enc3 = Box.encrypt combined3 nonce (Box.encode p3)
 
       -- Layer 2: Encrypted with kp1 (SK1) for Node B (nodeB)
       -- Decrypted by B to find C and Layer 3.
-      let p2 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort (NodeInfo.address nodeC)) (publicKey kp2) enc3
+      let p2 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort (NodeInfo.address nodeC)) (KeyPair.publicKey kp2) enc3
       combined2 <- Keyed.getCombinedKey (secretKey kp1) (NodeInfo.publicKey nodeB)
       let enc2 = Box.encrypt combined2 nonce (Box.encode p2)
 
       -- Layer 1: Encrypted with our DHT key for Node A (nodeA)
       -- Decrypted by A to find B and Layer 2.
-      let p1 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort (NodeInfo.address nodeB)) (publicKey kp1) enc2
+      let p1 = Tunnel.OnionRequestPayload (Tunnel.OnionIPPort (NodeInfo.address nodeB)) (KeyPair.publicKey kp1) enc2
       Tunnel.wrapOnion0 ourKeyPair (NodeInfo.publicKey nodeA) nonce p1
     _ -> error "wrapPath: OnionPath must have exactly 3 nodes and 3 keys"
 \end{code}
@@ -297,7 +307,7 @@ Onion data packets:
   Length             & Contents \\
   \hline
   \texttt{32}        & Long term public key of sender \\
-  variable           & Payload \\
+  variable           & Payload \\
 \end{tabular}
 
 The payload is encrypted with long term private key of the sender, the long

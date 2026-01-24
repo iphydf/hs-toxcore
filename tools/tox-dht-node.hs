@@ -50,23 +50,23 @@ import           Tox.Conduit.Network           (fromSockAddr, udpSink,
                                                 udpSource)
 import           Tox.Core.Time                 (getTime)
 import           Tox.Core.Timed                (Timed (..))
-import qualified Tox.Crypto.Key                as Key
-import           Tox.Crypto.Key                (PublicKey)
-import           Tox.Crypto.Keyed              (Keyed (..))
-import           Tox.Crypto.KeyedT             (KeyedT, evalKeyedT)
+import qualified Tox.Crypto.Core.Key                as Key
+import           Tox.Crypto.Core.Key                (PublicKey)
+import           Tox.Crypto.Core.Keyed         (Keyed (..), KeyedT,
+                                                evalKeyedT)
 import           Tox.DHT.DhtPacket             (DhtPacket (..))
 import qualified Tox.DHT.DhtState              as DhtState
 import           Tox.DHT.DhtState              (DhtState)
 import           Tox.DHT.Operation             (DhtNodeMonad, initDht)
-import           Tox.Network.HostAddress       (HostAddress (..))
-import           Tox.Network.MonadRandomBytes  (MonadRandomBytes (..))
-import           Tox.Network.Networked         (Networked (..))
-import           Tox.Network.NodeInfo          (NodeInfo (..))
-import           Tox.Network.Packet            (Packet (..))
-import           Tox.Network.PortNumber        (PortNumber (..))
-import           Tox.Network.SocketAddress     (SocketAddress (..))
-import           Tox.Network.TimedT            (runTimedT)
-import           Tox.Network.TransportProtocol (TransportProtocol (..))
+import           Tox.Network.Core.HostAddress       (HostAddress (..))
+import           Tox.Crypto.Core.MonadRandomBytes  (MonadRandomBytes (..))
+import           Tox.Network.Core.Networked         (Networked (..))
+import           Tox.Network.Core.NodeInfo          (NodeInfo (..))
+import           Tox.Network.Core.Packet            (Packet (..))
+import           Tox.Network.Core.PortNumber        (PortNumber (..))
+import           Tox.Network.Core.SocketAddress     (SocketAddress (..))
+import           Tox.Network.Core.TimedT            (runTimedT)
+import           Tox.Network.Core.TransportProtocol (TransportProtocol (..))
 
 data ToxNodeJSON = ToxNodeJSON
     { jsonIpv4      :: Maybe String
