@@ -11,6 +11,7 @@ import           Data.Binary          (Binary, encode)
 import qualified Data.ByteString.Lazy as LBS
 import           Data.List            (isInfixOf)
 import           Control.Monad.Identity (runIdentity)
+import           Control.Monad.Logger (runNoLoggingT)
 import           Control.Monad.Random (evalRandT)
 import           Control.Monad.State (runStateT)
 
@@ -54,6 +55,7 @@ spec = do
             ((_, _), events) = runIdentity
               . Networked.runNetworkLogged
               . (`runStateT` dhtState)
+              . runNoLoggingT
               . (`evalRandT` unwrapArbStdGen seed)
               . (`TimedT.runTimedT` time)
               . (`KeyedT.evalKeyedT` Map.empty)

@@ -13,11 +13,13 @@ import           GHC.Generics              (Generic)
 import           Test.QuickCheck.Arbitrary (Arbitrary (..))
 import qualified Test.QuickCheck.Gen       as Gen
 
+import qualified Crypto.Saltine.Class               as Sodium
+import           Data.Maybe                         (fromJust)
 import           Tox.Crypto.Core.Box            (CipherText, PlainText (..),
-                                            cipherText, decrypt, encrypt)
+                                            cipherText, decrypt, encrypt, unCipherText)
 import qualified Tox.Crypto.Core.Box            as Box
-import           Tox.Crypto.Core.Key            (CombinedKey, Nonce, PublicKey,
-                                            SecretKey)
+import           Tox.Crypto.Core.Key            (CombinedKey, Key (..), Nonce,
+                                            PublicKey, SecretKey, unKey)
 import           Tox.Crypto.Core.Keyed          (Keyed)
 import qualified Tox.Crypto.Core.Keyed          as Keyed
 import           Tox.Crypto.Core.KeyPair        (KeyPair (..))
@@ -86,10 +88,15 @@ instance MessagePack OnionRequest0
 
 instance Binary OnionRequest0 where
   put req = do
-    put $ onion0Nonce req
-    put $ onion0SenderPublicKey req
-    put $ onion0EncryptedPayload req
-  get = OnionRequest0 <$> get <*> get <*> get
+    Put.putByteString . Sodium.encode . unKey . onion0Nonce $ req
+    Put.putByteString . Sodium.encode . unKey . onion0SenderPublicKey $ req
+    Put.putByteString . unCipherText . onion0EncryptedPayload $ req
+  get = do
+    nonce <- Key . fromJust . Sodium.decode <$> Get.getByteString 24
+    pk <- Key . fromJust . Sodium.decode <$> Get.getByteString 32
+    -- The encrypted payload is the rest of the packet.
+    payload <- LBS.toStrict <$> Get.getRemainingLazyByteString >>= cipherText
+    return $ OnionRequest0 nonce pk payload
 
 instance Arbitrary OnionRequest0 where
   arbitrary = OnionRequest0 <$> arbitrary <*> arbitrary <*> arbitrary
@@ -111,10 +118,19 @@ instance Binary OnionRequestRelay where
   put req = do
     put $ onionRelayNonce req
     put $ onionRelayTemporaryKey req
+    -- Use 16-bit length prefix for internal variable-length fields
+    Put.putWord16be . fromIntegral . BS.length . Box.unCipherText $ onionRelayEncryptedPayload req
     put $ onionRelayEncryptedPayload req
     put $ onionRelayReturnNonce req
-    put $ onionRelayReturnData req
-  get = OnionRequestRelay <$> get <*> get <*> get <*> get <*> get
+    put $ onionRelayReturnData req -- Last field, no prefix needed
+  get = do
+    nonce <- get
+    tempPk <- get
+    len <- fromIntegral <$> Get.getWord16be
+    payload <- Get.getByteString len >>= Box.cipherText
+    retNonce <- get
+    retData <- get -- Uses getRemainingLazyByteString via CipherText instance
+    return $ OnionRequestRelay nonce tempPk payload retNonce retData
 
 instance Arbitrary OnionRequestRelay where
   arbitrary = OnionRequestRelay <$> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary <*> arbitrary
@@ -133,9 +149,31 @@ instance MessagePack OnionRequestPayload
 instance Binary OnionRequestPayload where
   put req = do
     put $ onionPayloadDestination req
-    put $ onionPayloadTemporaryKey req
-    put $ onionPayloadEncryptedPayload req
-  get = OnionRequestPayload <$> get <*> get <*> get
+    Put.putByteString . Sodium.encode . unKey . onionPayloadTemporaryKey $ req
+    Put.putByteString . unCipherText . onionPayloadEncryptedPayload $ req
+  get = do
+    dest <- get
+    tempPk <- Key . fromJust . Sodium.decode <$> Get.getByteString 32
+    payload <- LBS.toStrict <$> Get.getRemainingLazyByteString >>= cipherText
+    return $ OnionRequestPayload dest tempPk payload
+
+-- | Inner-most payload of an Onion Request (Node C to D).
+data OnionRequestPayloadFinal = OnionRequestPayloadFinal
+  { onionPayloadFinalDestination :: OnionIPPort
+  , onionPayloadFinalData        :: BS.ByteString
+  }
+  deriving (Eq, Show, Read, Generic)
+
+instance MessagePack OnionRequestPayloadFinal
+
+instance Binary OnionRequestPayloadFinal where
+  put req = do
+    put $ onionPayloadFinalDestination req
+    Put.putByteString $ onionPayloadFinalData req
+  get = do
+    dest <- get
+    payload <- LBS.toStrict <$> Get.getRemainingLazyByteString
+    return $ OnionRequestPayloadFinal dest payload
 
 instance Arbitrary OnionRequestPayload where
   arbitrary = OnionRequestPayload <$> arbitrary <*> arbitrary <*> arbitrary
@@ -154,9 +192,15 @@ instance MessagePack OnionResponse
 instance Binary OnionResponse where
   put res = do
     put $ onionResponseNonce res
+    Put.putWord16be . fromIntegral . BS.length . Box.unCipherText $ onionResponseEncryptedSendback res
     put $ onionResponseEncryptedSendback res
     Put.putByteString $ onionResponseData res
-  get = OnionResponse <$> get <*> get <*> (LBS.toStrict <$> Get.getRemainingLazyByteString)
+  get = do
+    nonce <- get
+    len <- fromIntegral <$> Get.getWord16be
+    encSendback <- Get.getByteString len >>= Box.cipherText
+    rest <- LBS.toStrict <$> Get.getRemainingLazyByteString
+    return $ OnionResponse nonce encSendback rest
 
 instance Arbitrary OnionResponse where
   arbitrary = OnionResponse <$> arbitrary <*> arbitrary <*> (BS.pack <$> arbitrary)
@@ -192,6 +236,17 @@ wrapOnionRelay (KeyPair sk pk) receiverPk nonce payload retNonce retData = do
 unwrapOnionRelay :: Keyed m
                  => KeyPair -> OnionRequestRelay -> m (Maybe (OnionRequestPayload, Nonce, CipherText))
 unwrapOnionRelay (KeyPair sk _) (OnionRequestRelay nonce senderPk encrypted retNonce retData) = do
+  combined <- Keyed.getCombinedKey sk senderPk
+  case Box.decrypt combined nonce encrypted of
+    Nothing    -> return Nothing
+    Just plain -> case Box.decode plain of
+      Nothing      -> return Nothing
+      Just payload -> return $ Just (payload, retNonce, retData)
+
+-- | Unwrap the inner-most Onion Request layer (Node C to D).
+unwrapOnionFinal :: Keyed m
+                 => KeyPair -> OnionRequestRelay -> m (Maybe (OnionRequestPayloadFinal, Nonce, CipherText))
+unwrapOnionFinal (KeyPair sk _) (OnionRequestRelay nonce senderPk encrypted retNonce retData) = do
   combined <- Keyed.getCombinedKey sk senderPk
   case Box.decrypt combined nonce encrypted of
     Nothing    -> return Nothing

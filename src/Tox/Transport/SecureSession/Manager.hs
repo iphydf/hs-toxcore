@@ -22,6 +22,7 @@ import           Tox.Network.Core.Networked     (Networked)
 import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes)
 import           Tox.Core.Timed                 (Timed)
 import           Tox.Crypto.Core.Keyed          (Keyed)
+import           Control.Monad.Logger           (MonadLogger)
 
 data SessionManager = SessionManager
   { sessionsByPk :: Map PublicKey SecureSessionState
@@ -30,7 +31,7 @@ data SessionManager = SessionManager
   }
 
 -- | Handle an incoming packet, dispatching to the correct session.
-dispatchPacket :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadState SessionManager m)
+dispatchPacket :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadState SessionManager m, MonadLogger m)
                => NodeInfo -> Packet ByteString -> m ()
 dispatchPacket from pkt@(Packet kind payload) = case kind of
   PacketKind.CookieRequest -> do

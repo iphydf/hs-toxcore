@@ -20,6 +20,7 @@ import qualified Data.ByteString           as BS
 import qualified Data.ByteString.Lazy      as LBS
 import           Data.Word                 (Word64, Word16)
 import           Data.Int                  (Int16)
+import           Data.Text                 (pack)
 import           GHC.Generics              (Generic)
 
 import           Tox.Crypto.Core.Key            (PublicKey, Nonce, CombinedKey, Key(..), unKey)
@@ -35,7 +36,7 @@ import qualified Tox.Core.Time                  as Time
 import           Tox.Core.Timed                 (Timed(..))
 import           Tox.Crypto.Core.MonadRandomBytes (MonadRandomBytes (..), randomNonce, randomWord64)
 import qualified Tox.Network.Core.PacketKind       as PacketKind
-import           Tox.Network.Core.Packet           (Packet (..))
+import           Tox.Network.Core.Packet           (Packet (..), RawPayload(..))
 import           Tox.Network.Core.NodeInfo         (NodeInfo(..))
 import qualified Tox.Network.Core.NodeInfo         as NodeInfo
 import           Tox.Network.Core.Networked        (Networked (..))
@@ -43,6 +44,8 @@ import           Tox.Network.Core.TransportProtocol (TransportProtocol(UDP))
 
 import qualified Tox.Transport.Reliability      as Reliability
 import qualified Tox.Transport.Stream           as Stream
+
+import           Control.Monad.Logger           (MonadLogger, logInfoN, logDebugN, logWarnN, logErrorN)
 
 import qualified System.Clock                  as Clock
 import qualified Crypto.Saltine.Class          as Sodium
@@ -248,7 +251,11 @@ instance Binary Cookie where
   put c = do
     Binary.put $ cookieNonce c
     Binary.put $ cookieEncryptedPayload c
-  get = Cookie <$> Binary.get <*> Binary.get
+  get = do
+    nonce <- Binary.get
+    -- Cookie payload is exactly 88 bytes in Tox (72 bytes payload + 16 bytes MAC)
+    payload <- Get.getByteString 88 >>= Box.cipherText
+    return $ Cookie nonce payload
 
 -- | Inner payload of a Cookie.
 data CookieInner = CookieInner
@@ -318,7 +325,11 @@ instance Binary Handshake where
     Binary.put $ hCookie h
     Binary.put $ hNonce h
     Binary.put $ hEncryptedMessage h
-  get = Handshake <$> Binary.get <*> Binary.get <*> Binary.get
+  get = do
+    cookie <- Binary.get
+    nonce <- Binary.get
+    payload <- LBS.toStrict <$> Get.getRemainingLazyByteString >>= Box.cipherText
+    return $ Handshake cookie nonce payload
 
 -- | Inner message of a Handshake.
 data HandshakeInner = HandshakeInner
@@ -675,10 +686,11 @@ initSession now ourRealKp peerRealPk ourDhtKp peerDhtPk peerNode = do
     }
 
 
-sendCookieRequest :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+sendCookieRequest :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                   => m ()
 sendCookieRequest = do
   ss <- get
+  logInfoN $ "Sending CookieRequest to " <> (pack $ show $ ssPeerNodeInfo ss)
   nonce <- randomNonce
   echoId <- randomWord64
   dhtSharedKey <- getDhtSharedKey ss
@@ -687,36 +699,40 @@ sendCookieRequest = do
       plain = Box.encode cri
       encrypted = Box.encrypt dhtSharedKey nonce plain
       cr = CookieRequest (KeyPair.publicKey $ ssOurDhtKeyPair ss) nonce encrypted
-      pkt = Packet PacketKind.CookieRequest (LBS.toStrict $ Binary.encode cr)
+      pkt = Packet PacketKind.CookieRequest (RawPayload $ LBS.toStrict $ Binary.encode cr)
   
   sendPacket (ssPeerNodeInfo ss) pkt
   modify $ \s -> s { ssStatus = Just (SessionCookieSent echoId) }
 
 -- | Handle an incoming packet for this session.
-handlePacket :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadState SecureSessionState m)
+handlePacket :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadState SecureSessionState m, MonadLogger m)
              => CombinedKey -> NodeInfo -> Packet BS.ByteString -> m ()
-handlePacket ck from (Packet kind payload) = case kind of
-  PacketKind.CookieResponse -> handleCookieResponse from payload
-  PacketKind.CryptoHandshake -> handleHandshake ck from payload
-  PacketKind.CryptoData -> handleCryptoData from payload
-  _ -> return ()
+handlePacket ck from (Packet kind payload) = do
+  logDebugN $ "Handling session packet from " <> pack (show from) <> ": " <> pack (show kind)
+  case kind of
+    PacketKind.CookieResponse -> handleCookieResponse from payload
+    PacketKind.CryptoHandshake -> handleHandshake ck from payload
+    PacketKind.CryptoData -> handleCryptoData from payload
+    _ -> return ()
 
 -- | Handle a CookieRequest (Server side).
-handleCookieRequest :: (Timed m, MonadRandomBytes m, Keyed m, Networked m)
+handleCookieRequest :: (Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                     => CombinedKey -> KeyPair -> NodeInfo -> BS.ByteString -> m ()
 handleCookieRequest cookieKey ourDhtKp from payload = do
+  logInfoN $ "Received CookieRequest from " <> pack (show from)
   case Box.decode (Box.PlainText payload) of
-    Nothing -> return ()
+    Nothing -> logWarnN "Failed to decode CookieRequest"
     Just (cr :: CookieRequest) -> do
       now <- askTime
       let timeInt = timestampToMicroseconds now
       
       sharedKey <- getCombinedKey (KeyPair.secretKey ourDhtKp) (crSenderDhtPk cr)
       case Box.decrypt sharedKey (crNonce cr) (crEncryptedMessage cr) of
-        Nothing -> return ()
+        Nothing -> logWarnN "Failed to decrypt CookieRequest"
         Just plain -> case Box.decode plain of
-          Nothing -> return ()
+          Nothing -> logWarnN "Failed to decode inner CookieRequest"
           Just (cri :: CookieRequestInner) -> do
+            logDebugN $ "Generating Cookie for " <> pack (show from)
             cookie <- createCookie cookieKey timeInt (criSenderRealPk cri) (crSenderDhtPk cr)
             nonce <- randomNonce
             
@@ -724,33 +740,36 @@ handleCookieRequest cookieKey ourDhtKp from payload = do
                 plainR = Box.encode rsi
                 encryptedR = Box.encrypt sharedKey nonce plainR
                 rs = CookieResponse nonce encryptedR
-                pkt = Packet PacketKind.CookieResponse (LBS.toStrict $ Binary.encode rs)
+                pkt = Packet PacketKind.CookieResponse (RawPayload $ LBS.toStrict $ Binary.encode rs)
             
             sendPacket from pkt
 
-handleCookieResponse :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+handleCookieResponse :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                      => NodeInfo -> BS.ByteString -> m ()
-handleCookieResponse _from payload = do
+handleCookieResponse from payload = do
   ss <- get
+  logInfoN $ "Received CookieResponse from " <> pack (show from)
   case Box.decode (Box.PlainText payload) of
-    Nothing -> return ()
+    Nothing -> logWarnN "Failed to decode CookieResponse"
     Just (rs :: CookieResponse) -> do
       sharedKey <- getDhtSharedKey ss
       case Box.decrypt sharedKey (rsNonce rs) (rsEncryptedMessage rs) of
-        Nothing -> return ()
+        Nothing -> logWarnN "Failed to decrypt CookieResponse"
         Just plain -> case Box.decode plain of
-          Nothing -> return ()
+          Nothing -> logWarnN "Failed to decode inner CookieResponse"
           Just (rsi :: CookieResponseInner) -> do
             case ssStatus ss of
               Just (SessionCookieSent echoId) | echoId == rsiEchoId rsi -> do
+                logInfoN $ "Cookie exchange successful for " <> pack (show from)
                 modify $ \s -> s { ssStatus = Just (SessionHandshakeSent (rsiCookie rsi)) }
                 sendHandshake (rsiCookie rsi)
-              _ -> return ()
+              _ -> logWarnN $ "Unexpected CookieResponse from " <> pack (show from)
 
-sendHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+sendHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
               => Cookie -> m ()
 sendHandshake cookie = do
   ss <- get
+  logInfoN $ "Sending Handshake to " <> pack (show (ssPeerNodeInfo ss))
   nonce <- randomNonce
   realSharedKey <- getRealSharedKey ss
   
@@ -760,35 +779,39 @@ sendHandshake cookie = do
       plain = Box.encode hi
       encrypted = Box.encrypt realSharedKey nonce plain
       h = Handshake cookie nonce encrypted
-      pkt = Packet PacketKind.CryptoHandshake (LBS.toStrict $ Binary.encode h)
-
+      pkt = Packet PacketKind.CryptoHandshake (RawPayload $ LBS.toStrict $ Binary.encode h)
+  
   sendPacket (ssPeerNodeInfo ss) pkt
 
-handleHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+
+-- | Handle an incoming Handshake packet.
+handleHandshake :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                 => CombinedKey -> NodeInfo -> BS.ByteString -> m ()
 handleHandshake cookieK from payload = do
   ss <- get
+  logInfoN $ "Received Handshake from " <> pack (show from)
   case Box.decode (Box.PlainText payload) of
-    Nothing -> return ()
+    Nothing -> logWarnN "Failed to decode Handshake"
     Just (h :: Handshake) -> do
       -- 1. Validate our Cookie
       now <- askTime
       case decryptCookie cookieK (hCookie h) of
-        Nothing -> return () -- Not our cookie
+        Nothing -> logWarnN "Handshake has invalid/not-our cookie"
         Just ci -> do
           let ciTimestamp = Timestamp $ Clock.TimeSpec (fromIntegral $ ciTime ci `div` 1000000) (fromIntegral $ (ciTime ci `mod` 1000000) * 1000)
               age = now `Time.diffTime` ciTimestamp
           
           if age > Time.seconds 15
-          then return () -- Expired
+          then logWarnN $ "Handshake has expired cookie (age: " <> pack (show age) <> ")"
           else do
             -- 2. Decrypt Handshake
             realSharedKey <- getRealSharedKey ss
             case Box.decrypt realSharedKey (hNonce h) (hEncryptedMessage h) of
-              Nothing -> return ()
+              Nothing -> logWarnN "Failed to decrypt Handshake payload"
               Just plain -> case Box.decode plain of
-                Nothing -> return ()
+                Nothing -> logWarnN "Failed to decode inner Handshake"
                 Just (hi :: HandshakeInner) -> do
+                  logInfoN $ "Handshake validated for " <> pack (show from)
                   -- Mobility: update peer address if it changed
                   modify $ \s -> s { ssPeerNodeInfo = from }
                   
@@ -802,7 +825,9 @@ handleHandshake cookieK from payload = do
                     }
                   
                   case ssStatus ss of
-                    Just (SessionHandshakeSent _) -> sendHandshake (hiOtherCookie hi)
+                    Just (SessionHandshakeSent _) -> do
+                      logInfoN $ "Sending Handshake back to " <> pack (show from)
+                      sendHandshake (hiOtherCookie hi)
                     _ -> return ()
 
 sendCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
@@ -824,7 +849,7 @@ sendCryptoData msg = do
           plain = Box.PlainText $ LBS.toStrict $ Binary.encode rp
           encrypted = Box.encrypt sharedKey fullNonce plain
           cd = CryptoDataPacket shortNonce encrypted
-          pkt = Packet PacketKind.CryptoData (LBS.toStrict $ Binary.encode cd)
+          pkt = Packet PacketKind.CryptoData (RawPayload $ LBS.toStrict $ Binary.encode cd)
           
           stream' = Stream.recordPacketSent (Reliability.SeqNum pktNum) now (ssStream ss)
       
@@ -836,7 +861,7 @@ sendCryptoData msg = do
         }
     _ -> return ()
 
-handleCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+handleCryptoData :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                  => NodeInfo -> BS.ByteString -> m ()
 handleCryptoData from payload = do
   ss <- get
@@ -847,19 +872,26 @@ handleCryptoData from payload = do
         Just (cd :: CryptoDataPacket) -> do
           let nonce = calculateNonce peerBaseNonce (cdNonceShort cd)
           case Box.decrypt sharedKey nonce (cdPayload cd) of
-            Nothing -> return ()
+            Nothing -> logWarnN $ "Failed to decrypt CryptoData from " <> pack (show from)
             Just plain -> do
               now <- askTime
               case Binary.decodeOrFail (LBS.fromStrict $ Box.unPlainText plain) of
-                Left _ -> return ()
+                Left _ -> logWarnN $ "Failed to decode ReliablePacket from " <> pack (show from)
                 Right (_, _, rp :: Reliability.ReliablePacket) -> do
+                  logDebugN $ "Received ReliablePacket #" <> pack (show (Reliability.rpPacketNumber rp)) <> " from " <> pack (show from)
                   let (rel', delivered) = Reliability.handleIncoming rp (ssReliability ss)
+                      
+                      -- Update Stream RTT tracking for all ACKed packets
+                      -- Peer says they received everything before rpRecvBufferStart rp
                       ackStart = Reliability.rpRecvBufferStart rp
                       stream' = foldr (\s st -> Stream.recordPacketAcked s now st) (ssStream ss) 
                                   [s | s <- Map.keys (Reliability.rsSendWindow (ssReliability ss)), s < ackStart]
 
-                  -- Handle PacketRequests and other delivered payloads
+                      -- Handle PacketRequests and other delivered payloads
                   (rel'', stream'') <- foldM (processDelivered from) (rel', stream') delivered
+
+                  when (ssStatus ss /= Just SessionConfirmed) $
+                    logInfoN $ "SecureSession established (CONNECTED) with " <> pack (show from)
 
                   modify $ \s -> s 
                     { ssStatus = Just SessionConfirmed
@@ -899,7 +931,7 @@ handleCryptoData from payload = do
         _ -> return (rel, stream) -- TODO: pass other packets to application layer
 
 -- | Periodically maintain the session (handshake retries, timeouts).
-maintainSession :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+maintainSession :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                 => m ()
 maintainSession = do
   ss <- get
@@ -944,7 +976,7 @@ maintainSession = do
     resetSession = modify $ \s -> s { ssStatus = Nothing, ssRetryCount = 0, ssLastAttempt = Nothing }
 
 -- | Send a packet request if the reliability layer detects missing packets.
-sendPacketRequests :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m)
+sendPacketRequests :: (MonadState SecureSessionState m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m)
                    => m ()
 sendPacketRequests = do
   ss <- get

@@ -3,10 +3,12 @@
 
 module Tox.Crypto.Core.MonadRandomBytes where
 
+import           Control.Monad.Logger      (LoggingT)
 import           Control.Monad.Random      (RandT, getRandoms)
 import           Control.Monad.Reader      (ReaderT)
 import           Control.Monad.RWS         (RWST)
 import           Control.Monad.State       (StateT)
+import           Control.Monad.Trans       (lift)
 import           Control.Monad.Trans.Class (lift)
 import           Control.Monad.Writer      (WriterT)
 import           Data.Binary               (get)
@@ -20,10 +22,10 @@ import           System.Entropy            (getEntropy)
 import           System.Random             (RandomGen)
 
 
-import qualified Tox.Crypto.Core.Key            as Key
-import           Tox.Crypto.Core.Key            (Key)
-import qualified Tox.Crypto.Core.KeyPair        as KeyPair
-import           Tox.Crypto.Core.KeyPair        (KeyPair)
+import qualified Tox.Crypto.Core.Key       as Key
+import           Tox.Crypto.Core.Key       (Key)
+import qualified Tox.Crypto.Core.KeyPair   as KeyPair
+import           Tox.Crypto.Core.KeyPair   (KeyPair)
 
 class (Monad m, Applicative m) => MonadRandomBytes m where
   randomBytes :: Int -> m ByteString
@@ -40,6 +42,9 @@ instance MonadRandomBytes IO where
   newKeyPair = KeyPair.newKeyPair
 
 instance MonadRandomBytes m => MonadRandomBytes (ReaderT r m) where
+  randomBytes = lift . randomBytes
+  newKeyPair = lift newKeyPair
+instance MonadRandomBytes m => MonadRandomBytes (LoggingT m) where
   randomBytes = lift . randomBytes
   newKeyPair = lift newKeyPair
 instance (Monoid w, MonadRandomBytes m) => MonadRandomBytes (WriterT w m) where

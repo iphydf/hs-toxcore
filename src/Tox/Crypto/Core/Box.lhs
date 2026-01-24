@@ -24,8 +24,10 @@ import qualified Crypto.Saltine.Core.Box     as Sodium (boxAfterNM,
                                                         boxOpenAfterNM)
 import qualified Crypto.Saltine.Internal.Box as Sodium
 import           Data.Binary                 (Binary, get, put)
+import qualified Data.Binary.Get             as Get
 import           Data.Binary.Get             (Decoder (..), pushChunk,
                                               runGetIncremental)
+import qualified Data.Binary.Put             as Binary
 import           Data.Binary.Put             (runPut)
 import           Data.ByteString             (ByteString)
 import qualified Data.ByteString             as ByteString
@@ -59,9 +61,13 @@ transmitted over untrusted data channels.
 
 
 newtype PlainText = PlainText { unPlainText :: ByteString }
-  deriving (Eq, Binary, Generic, Typeable)
+  deriving (Eq, Generic, Typeable)
 
 instance MessagePack PlainText
+
+instance Binary PlainText where
+  put = Binary.putByteString . unPlainText
+  get = PlainText . LazyByteString.toStrict <$> Get.getRemainingLazyByteString
 
 instance Show PlainText where
   show = show . Base16.encode . unPlainText
@@ -83,8 +89,8 @@ cipherText bs
   | otherwise                                   = refute "ciphertext is too short"
 
 instance Binary CipherText where
-  put = put . unCipherText
-  get = get >>= cipherText
+  put = Binary.putByteString . unCipherText
+  get = LazyByteString.toStrict <$> Get.getRemainingLazyByteString >>= cipherText
 
 instance MessagePack CipherText where
   toObject cfg = toObject cfg . unCipherText

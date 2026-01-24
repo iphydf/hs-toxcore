@@ -2,14 +2,14 @@
 {-# LANGUAGE RankNTypes       #-}
 module Tox.Conduit.Network where
 
-import           Control.Monad                 (void)
-import           Control.Monad.IO.Class        (MonadIO, liftIO)
-import           Data.Binary                   (Binary)
-import qualified Data.ByteString               as BS
-import           Data.Conduit                  (ConduitT, await, yield)
-import qualified Data.Conduit.List             as CL
-import qualified Network.Socket                as Socket
-import qualified Network.Socket.ByteString     as SocketBS
+import           Control.Monad                      (void)
+import           Control.Monad.IO.Class             (MonadIO, liftIO)
+import           Data.Binary                        (Binary)
+import qualified Data.ByteString                    as BS
+import           Data.Conduit                       (ConduitT, await, yield)
+import qualified Data.Conduit.List                  as CL
+import qualified Network.Socket                     as Socket
+import qualified Network.Socket.ByteString          as SocketBS
 
 import           Tox.Network.Core.HostAddress       (HostAddress (..))
 import           Tox.Network.Core.NodeInfo          (NodeInfo (..))

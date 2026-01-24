@@ -11,6 +11,7 @@ module Tox.Transport.SecureSessionSpec where
 import           Test.Hspec
 import           Control.Monad.State
 import           Control.Monad.Random
+import           Control.Monad.Logger (MonadLogger, NoLoggingT, runNoLoggingT)
 import qualified Data.Map as Map
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BS8
@@ -29,7 +30,7 @@ import           Tox.Crypto.Core.Key (PublicKey, CombinedKey, unKey)
 import qualified Tox.Crypto.Core.Nonce as Nonce
 import qualified Tox.Crypto.Core.CombinedKey as CombinedKey
 import qualified Tox.Crypto.Core.Box as Box
-import           Tox.Crypto.Core.Keyed (KeyedT, evalKeyedT)
+import           Tox.Crypto.Core.Keyed (Keyed, KeyedT, evalKeyedT)
 import           Tox.Network.Core.NodeInfo (NodeInfo(..))
 import qualified Tox.Network.Core.NodeInfo as NodeInfo
 import           Tox.Network.Core.SocketAddress
@@ -45,11 +46,12 @@ import qualified Tox.Core.Time as Time
 import           Tox.Core.Timed (Timed(..))
 
 -- | A monad for running a full simulation with a SessionManager.
-type ManagerM = KeyedT (TimedT (RandT StdGen (StateT SessionManager (NetworkLogged Identity))))
+newtype ManagerM a = ManagerM { unManagerM :: KeyedT (TimedT (RandT StdGen (NoLoggingT (StateT SessionManager (NetworkLogged Identity))))) a }
+  deriving (Functor, Applicative, Monad, MonadState SessionManager, Timed, MonadRandomBytes, Keyed, Networked, MonadLogger)
 
 runManagerM :: StdGen -> Timestamp -> SessionManager -> ManagerM a -> (a, SessionManager, [NetworkAction])
 runManagerM gen time sm m =
-  let ( (a, sm'), actions ) = runIdentity . runNetworkLogged . (`runStateT` sm) . (`evalRandT` gen) . (`runTimedT` time) . (`evalKeyedT` Map.empty) $ m
+  let ( (a, sm'), actions ) = runIdentity . runNetworkLogged . (`runStateT` sm) . runNoLoggingT . (`evalRandT` gen) . (`runTimedT` time) . (`evalKeyedT` Map.empty) $ unManagerM m
   in (a, sm', actions)
 
 spec :: Spec

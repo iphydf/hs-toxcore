@@ -8,6 +8,7 @@ import           Test.QuickCheck
 
 import           Control.Monad          (when)
 import           Control.Monad.Identity (runIdentity)
+import           Control.Monad.Logger   (runNoLoggingT)
 import           Control.Monad.Random   (evalRandT)
 import           Control.Monad.State    (runStateT)
 import           Control.Monad.Writer   (execWriterT)
@@ -116,6 +117,7 @@ spec = do
             ((_, _), events) = runIdentity
               . Networked.runNetworkLogged
               . (`runStateT` dhtState)
+              . runNoLoggingT
               . (`evalRandT` Operation.unwrapArbStdGen seed)
               . (`TimedT.runTimedT` time)
               . (`KeyedT.evalKeyedT` Map.empty)

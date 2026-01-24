@@ -8,12 +8,15 @@
 {-# LANGUAGE RankNTypes            #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
 {-# LANGUAGE StrictData            #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# OPTIONS_GHC -fno-warn-orphans  #-}
 module Tox.Onion.Operation where
 
 import           Control.Monad                (when, forM_)
 import           Control.Monad.State          (MonadState, gets, modify, StateT, runStateT)
 import           Data.Binary                  (Binary, encode)
 import qualified Data.Binary                  as Binary
+import qualified Data.Binary.Put              as Put
 import           Data.List                    (sortBy)
 import           Data.Ord                     (comparing)
 import           Data.Map                     (Map)
@@ -21,14 +24,15 @@ import qualified Data.Map                     as Map
 import qualified Data.ByteString              as BS
 import qualified Data.ByteString.Lazy         as LBS
 import           Control.Monad.Validate       (runValidate)
+import           Data.Maybe                   (fromJust)
 import qualified Data.Maybe                   as Maybe
 import           Data.MessagePack             (DecodeError)
-import           Data.Word                    (Word32, Word64)
+import           Data.Word                    (Word32, Word64, Word8)
 
 import qualified Crypto.Saltine.Class         as Sodium
 import           Tox.Core.Time                (TimeDiff, Timestamp, getTime)
 import qualified Tox.Core.Time                as Time
-import           Tox.Core.Timed               (Timed)
+import           Tox.Core.Timed               (Timed, askTime)
 import qualified Tox.Core.Timed               as Timed
 import qualified Tox.Core.PingArray           as PingArray
 import           Tox.Crypto.Core.Key               (PublicKey, Nonce, Key(..))
@@ -45,7 +49,8 @@ import           Tox.Network.Core.Networked        (Networked)
 import qualified Tox.Network.Core.Networked        as Networked
 import           Tox.Network.Core.NodeInfo         (NodeInfo)
 import qualified Tox.Network.Core.NodeInfo         as NodeInfo
-import           Tox.Network.Core.Packet           (Packet (..))
+import           Tox.Network.Core.Packet           (Packet (..), RawPayload(..))
+import           Tox.Network.Core.PacketKind       (PacketKind)
 import qualified Tox.Network.Core.PacketKind       as PacketKind
 import           Tox.Network.Core.SocketAddress    (SocketAddress)
 import           Tox.Network.Core.TransportProtocol (TransportProtocol (UDP))
@@ -55,6 +60,8 @@ import           Tox.Onion.RPC                     (AnnounceRequest (..), Announ
 import qualified Tox.Onion.RPC                     as RPC
 import qualified Tox.Onion.Tunnel                  as Tunnel
 import qualified Tox.DHT.DhtPacket                 as DhtPacket
+import           Control.Monad.Logger              (MonadLogger, logInfoN, logWarnN, logDebugN)
+import           Data.Text                         (pack)
 
 {-------------------------------------------------------------------------------
  -
@@ -62,10 +69,10 @@ import qualified Tox.DHT.DhtPacket                 as DhtPacket
  -
  ------------------------------------------------------------------------------}
 
-class (Monad m, Timed m, MonadRandomBytes m, Keyed m, Networked m) => OnionNodeMonad m where
+class (Monad m, Timed m, MonadRandomBytes m, Keyed m, Networked m, MonadLogger m) => OnionNodeMonad m where
   getOnionState :: m OnionState
   putOnionState :: OnionState -> m ()
-  getDhtPublicKey :: m PublicKey
+  getDhtKeyPair :: m KeyPair
 
 getOnion :: OnionNodeMonad m => m OnionState
 getOnion = getOnionState
@@ -80,7 +87,7 @@ modifyOnion :: OnionNodeMonad m => (OnionState -> OnionState) -> m ()
 modifyOnion f = getOnion >>= putOnion . f
 
 getDhtPk :: OnionNodeMonad m => m PublicKey
-getDhtPk = getDhtPublicKey
+getDhtPk = KeyPair.publicKey <$> getDhtKeyPair
 
 instance OnionNodeMonad m => Path.OnionPathMonad (StateT OnionPathState m)
 
@@ -96,11 +103,21 @@ data OnionState = OnionState
   , searchNodes     :: Map PublicKey (Map PublicKey AnnouncedNode) -- ^ Friends we are searching for
   , friendsToSearch :: [PublicKey] -- ^ List of friend long-term PKs to search for
   , requestTracker  :: PingArray.PingArray OnionRequest -- ^ Metadata for outgoing requests
+  , localAnnouncements :: Map PublicKey LocalAnnouncement -- ^ Nodes announced to us
   }
 
+data LocalAnnouncement = LocalAnnouncement
+  { laSenderRealPk :: PublicKey
+  , laSenderDhtPk  :: PublicKey
+  , laTimestamp    :: Timestamp
+  , laPingId       :: PublicKey
+  , laSendbackKey  :: PublicKey
+  } deriving (Eq, Show)
+
 data OnionRequest = OnionRequest
-  { orSearchKey :: PublicKey
-  , orTargetPk  :: PublicKey
+  { orSearchKey     :: PublicKey
+  , orTargetPk      :: PublicKey
+  , orSenderKeyPair :: KeyPair
   } deriving (Eq, Show)
 
 data AnnouncedNode = AnnouncedNode
@@ -119,6 +136,7 @@ initState keys = OnionState
   , searchNodes = Map.empty
   , friendsToSearch = []
   , requestTracker = PingArray.empty 1024 (Time.seconds 300)
+  , localAnnouncements = Map.empty
   }
 
 -- | Periodically maintain the onion layer.
@@ -176,6 +194,7 @@ handleAnnounceResponse :: OnionNodeMonad m => NodeInfo -> RPC.AnnounceResponse -
 handleAnnounceResponse from res = do
   ourLongTerm <- getsOnion ourLongTermKeys
   now <- Timed.askTime
+  logDebugN $ "Received AnnounceResponse from " <> pack (show from)
   
   -- Use sendback data to find the original target node's PK.
   s <- getOnion
@@ -183,74 +202,82 @@ handleAnnounceResponse from res = do
   putOnion $ s { requestTracker = tracker' }
   
   case mMeta of
-    Nothing -> return () -- No matching request found
-    Just (OnionRequest searchKey targetPk) -> do
-      -- Decrypt the payload
-      combined <- Keyed.getCombinedKey (KeyPair.secretKey ourLongTerm) targetPk
+    Nothing -> logWarnN "Received AnnounceResponse with unknown/expired sendback data"
+    Just (OnionRequest searchKey targetPk kp) -> do
+      -- Decrypt the payload using the keypair we used for the request
+      combined <- Keyed.getCombinedKey (KeyPair.secretKey kp) targetPk
       case Box.decrypt combined (RPC.announceResponseNonce res) (RPC.announceResponseEncryptedPayload res) of
-        Nothing -> return () -- Failed to decrypt
+        Nothing -> logWarnN $ "Failed to decrypt AnnounceResponse from " <> pack (show from)
         Just plain -> case Box.decode plain of
-          Nothing -> return () -- Failed to decode
+          Nothing -> logWarnN $ "Failed to decode decrypted AnnounceResponse from " <> pack (show from)
           Just (payload :: RPC.AnnounceResponsePayload) -> do
+            let pingId = RPC.announceResponsePingId payload
+                nodes = RPC.announceResponseNodes payload
+            logInfoN $ "Onion entry found/confirmed: target=" <> pack (show targetPk) <> " pingId=" <> pack (show pingId) <> ", found " <> pack (show $ length nodes) <> " nodes"
+            
             -- Update state with found info (pingId, etc.)
             let newNode = AnnouncedNode
                   { nodeInfo = NodeInfo.NodeInfo UDP (NodeInfo.address from) targetPk
-                  , pingId = Just (RPC.announceResponsePingId payload)
+                  , pingId = Just pingId
                   , lastAnnounced = Just now
                   , pathNum = 0 -- TODO
                   }
             
             if searchKey == KeyPair.publicKey ourLongTerm
-              then modifyOnion $ \s' -> s' { announcedNodes = Map.insert targetPk newNode (announcedNodes s') }
-              else modifyOnion $ \s' -> s' { searchNodes = Map.adjust (Map.insert targetPk newNode) searchKey (searchNodes s') }
+              then do
+                modifyOnion $ \s' -> s' { announcedNodes = Map.insert targetPk newNode (announcedNodes s') }
+                logInfoN $ "Confirmed announcement to " <> pack (show targetPk)
+              else do
+                modifyOnion $ \s' -> s' { searchNodes = Map.insertWith Map.union searchKey (Map.singleton targetPk newNode) (searchNodes s') }
+                logInfoN $ "Found " <> pack (show $ length nodes) <> " potential nodes for friend " <> pack (show searchKey)
 
 
 -- | Send an Announce Request through a chosen path.
 sendAnnounceRequest :: OnionNodeMonad m => OnionPath -> NodeInfo -> PublicKey -> Maybe PublicKey -> m ()
 sendAnnounceRequest path target searchKey mPingId = do
   ourLongTerm <- getsOnion ourLongTermKeys
+  ourDht <- getDhtKeyPair
   nonce <- MonadRandomBytes.randomNonce
   innerNonce <- MonadRandomBytes.randomNonce
+  
+  -- Use a temporary keypair for searches, real for announcements.
+  -- The spec requires this for anonymity.
+  senderKeyPair <- if searchKey == KeyPair.publicKey ourLongTerm
+                   then return ourLongTerm
+                   else MonadRandomBytes.newKeyPair
   
   -- Store request metadata for later response handling
   now <- Timed.askTime
   seed <- MonadRandomBytes.randomWord64
-  let meta = OnionRequest searchKey (NodeInfo.publicKey target)
+  let meta = OnionRequest searchKey (NodeInfo.publicKey target) senderKeyPair
   s <- getOnion
   let (sendback, tracker') = PingArray.addEntry now meta seed (requestTracker s)
   putOnion $ s { requestTracker = tracker' }
       
-  -- We use a temporary public key if we are searching, real if announcing ourselves.
-  let senderKeyPair = ourLongTerm -- TODO: use temporary key for searches
-      
-      payload = RPC.AnnounceRequestPayload
+  let payload = RPC.AnnounceRequestPayload
         { RPC.announceRequestPingId          = maybe (Key . Maybe.fromJust . Sodium.decode $ BS.replicate 32 0) id mPingId
         , RPC.announceRequestSearchKey       = searchKey
-        , RPC.announceRequestDataSendbackKey = KeyPair.publicKey ourLongTerm -- TODO: temporary
+        , RPC.announceRequestDataSendbackKey = KeyPair.publicKey senderKeyPair
         , RPC.announceRequestSendbackData    = sendback
         }
       
-      -- Encrypt the payload for the target node
-      -- Packet Kind 0x83
+  -- Encrypt the payload for the target node
   combined <- Keyed.getCombinedKey (KeyPair.secretKey senderKeyPair) (NodeInfo.publicKey target)
   let encryptedPayload = Box.encrypt combined innerNonce (Box.encode payload)
       
-      announceReq = RPC.AnnounceRequest 
-        { RPC.announceRequestNonce = innerNonce
-        , RPC.announceRequestSenderPublicKey = KeyPair.publicKey senderKeyPair
-        , RPC.announceRequestEncryptedPayload = encryptedPayload
-        }
-      
-      -- 0x83 kind + AnnounceRequest
-      dataToD = BS.singleton 0x83 <> LBS.toStrict (Binary.encode announceReq)
+      -- Standard AnnounceRequest envelope: Kind (0x83) + Nonce (24) + PK (32) + CipherText
+      dataToD = LBS.toStrict $ Put.runPut $ do
+        Binary.put (0x83 :: Word8)
+        Binary.put innerNonce
+        Binary.put (KeyPair.publicKey senderKeyPair)
+        Put.putByteString (unCipherText encryptedPayload)
 
   -- Wrap the onion request
   case (cipherTextMaybe dataToD, Path.pathNodes path) of
     (Just ct, (nodeA:_)) -> do
-      onionPkt0 <- Path.wrapPath ourLongTerm path (NodeInfo.address target) nonce ct
+      onionPkt0 <- Path.wrapPath ourDht path (NodeInfo.address target) nonce (unCipherText ct)
       Networked.sendPacket nodeA $ Packet PacketKind.OnionRequest0 onionPkt0
     _ -> return ()
-
 
 -- | Decrypt and dispatch a DHT request payload addressed to us.
 onDhtRequestPayload :: OnionNodeMonad m => NodeInfo -> DhtPacket.DhtPacket -> m ()
@@ -259,12 +286,13 @@ onDhtRequestPayload from dhtPkt = do
   mPlain <- DhtPacket.decryptKeyed ourKeyPair dhtPkt
   case mPlain of
     Nothing -> return ()
-    Just plain -> dispatchOnionData from (unPlainText plain)
+    Just plain -> dispatchOnionData [] Nothing from (unPlainText plain)
 
 
 -- | Handle an incoming top-level onion packet.
-handleOnionPacket :: OnionNodeMonad m => NodeInfo -> Packet BS.ByteString -> m ()
-handleOnionPacket from (Packet kind payload) = do
+handleOnionPacket :: OnionNodeMonad m => [NodeInfo] -> NodeInfo -> Packet BS.ByteString -> m ()
+handleOnionPacket dhtNodes from (Packet kind payload) = do
+  logDebugN $ "Received Onion packet from " <> pack (show from) <> ": " <> pack (show kind)
   ourKeyPair <- getsOnion ourLongTermKeys
   case kind of
     PacketKind.OnionRequest0 -> do
@@ -274,36 +302,66 @@ handleOnionPacket from (Packet kind payload) = do
           mInner <- Tunnel.unwrapOnion0 ourKeyPair req
           case mInner of
             Nothing -> return ()
-            Just inner -> handleRelayOrDispatch from (Tunnel.onion0Nonce req) inner
+            Just inner -> handleRelayOrDispatch dhtNodes from (Tunnel.onion0Nonce req) inner
     
-    PacketKind.OnionRequest1 -> handleOnionRelay from payload
-    PacketKind.OnionRequest2 -> handleOnionRelay from payload
+    PacketKind.OnionRequest1 -> handleOnionRelay dhtNodes PacketKind.OnionRequest1 from payload
+    PacketKind.OnionRequest2 -> handleOnionRelay dhtNodes PacketKind.OnionRequest2 from payload
     
-    PacketKind.OnionResponse1 -> handleOnionResponse from payload
-    PacketKind.OnionResponse2 -> handleOnionResponse from payload
-    PacketKind.OnionResponse3 -> handleOnionResponse from payload
+    PacketKind.OnionResponse1 -> handleOnionResponse dhtNodes from payload
+    PacketKind.OnionResponse2 -> handleOnionResponse dhtNodes from payload
+    PacketKind.OnionResponse3 -> handleOnionResponse dhtNodes from payload
+    
+    PacketKind.AnnounceResponse -> dispatchOnionData dhtNodes Nothing from (BS.cons 0x84 payload)
+    PacketKind.OnionDataRequest -> dispatchOnionData dhtNodes Nothing from (BS.cons 0x85 payload)
+    PacketKind.OnionDataResponse -> dispatchOnionData dhtNodes Nothing from (BS.cons 0x86 payload)
+    PacketKind.DHTPKPacket -> dispatchOnionData dhtNodes Nothing from (BS.cons 0x9c payload)
+    -- PacketKind.AnnounceRequest (0x83) is handled if we are Node D, but usually not top-level.
     
     _ -> return ()
-  where
-    runBinary (Box.PlainText bs) = case Binary.decodeOrFail (LBS.fromStrict bs) of
-      Left _ -> Nothing
-      Right (_, _, a) -> Just a
+
+
+runBinary :: Binary a => Box.PlainText -> Maybe a
+runBinary (Box.PlainText bs) = case Binary.decodeOrFail (LBS.fromStrict bs) of
+  Left _ -> Nothing
+  Right (_, _, a) -> Just a
 
 
 -- | Handle an intermediate relay request (0x81, 0x82).
-handleOnionRelay :: OnionNodeMonad m => NodeInfo -> BS.ByteString -> m ()
-handleOnionRelay _from _payload = do
-  -- TODO: implement intermediate layer unwrapping and relaying
-  return ()
+handleOnionRelay :: OnionNodeMonad m => [NodeInfo] -> PacketKind -> NodeInfo -> BS.ByteString -> m ()
+handleOnionRelay dhtNodes kind from payload = do
+  ourKeyPair <- getDhtKeyPair
+  case kind of
+    PacketKind.OnionRequest1 -> do
+      -- Node B receiving from Node A
+      case runBinary (Box.PlainText payload) of
+        Nothing -> return ()
+        Just (req :: Tunnel.OnionRequestRelay) -> do
+          mInner <- Tunnel.unwrapOnionRelay ourKeyPair req
+          case mInner of
+            Nothing -> return ()
+            Just (inner, _retNonce, _retData) ->
+              handleRelayOrDispatch dhtNodes from (Tunnel.onionRelayNonce req) inner
+
+    PacketKind.OnionRequest2 -> do
+      -- Node C receiving from Node B
+      case runBinary (Box.PlainText payload) of
+        Nothing -> return ()
+        Just (req :: Tunnel.OnionRequestRelay) -> do
+          mInner <- Tunnel.unwrapOnionFinal ourKeyPair req
+          case mInner of
+            Nothing -> return ()
+            Just (inner, _retNonce, _retData) -> do
+               dispatchOnionData dhtNodes Nothing from (Tunnel.onionPayloadFinalData inner)
+    _ -> return ()
 
 
 -- | Handle an onion response (0x8c, 0x8d, 0x8e).
-handleOnionResponse :: OnionNodeMonad m => NodeInfo -> BS.ByteString -> m ()
-handleOnionResponse from bs = do
+handleOnionResponse :: OnionNodeMonad m => [NodeInfo] -> NodeInfo -> BS.ByteString -> m ()
+handleOnionResponse dhtNodes from bs = do
   case runBinary bs of
     Nothing -> return ()
     Just (res :: Tunnel.OnionResponse) -> do
-      dispatchOnionData from (Tunnel.onionResponseData res)
+      dispatchOnionData dhtNodes Nothing from (Tunnel.onionResponseData res)
   where
     runBinary payload = case Binary.decodeOrFail (LBS.fromStrict payload) of
       Left _ -> Nothing
@@ -311,26 +369,34 @@ handleOnionResponse from bs = do
 
 
 -- | Handle the innermost payload of an onion request.
-handleRelayOrDispatch :: OnionNodeMonad m => NodeInfo -> Nonce -> Tunnel.OnionRequestPayload -> m ()
-handleRelayOrDispatch from _nonce payload = do
-  dispatchOnionData from (unCipherText $ Tunnel.onionPayloadEncryptedPayload payload)
+handleRelayOrDispatch :: OnionNodeMonad m => [NodeInfo] -> NodeInfo -> Nonce -> Tunnel.OnionRequestPayload -> m ()
+handleRelayOrDispatch dhtNodes from _nonce payload = do
+  dispatchOnionData dhtNodes Nothing from (unCipherText $ Tunnel.onionPayloadEncryptedPayload payload)
 
 
 -- | Dispatch decrypted onion data to the appropriate service.
-dispatchOnionData :: OnionNodeMonad m => NodeInfo -> BS.ByteString -> m ()
-dispatchOnionData from bs = case BS.uncons bs of
-  Nothing -> return ()
-  Just (kind, payload) -> case kind of
-    0x83 -> case runBinary payload of
-              Nothing -> return ()
-              Just req -> handleAnnounceRequest from req
-    0x84 -> case runBinary payload of
-              Nothing -> return ()
-              Just res -> handleAnnounceResponse from res
-    0x9c -> case runBinary payload of
-              Nothing -> return ()
-              Just pkt -> handleDHTPKPacket from pkt
-    _    -> return ()
+dispatchOnionData :: OnionNodeMonad m => [NodeInfo] -> Maybe PublicKey -> NodeInfo -> BS.ByteString -> m ()
+dispatchOnionData dhtNodes mSenderPk from bs = do
+  logDebugN $ "Dispatching onion data (length: " <> pack (show (BS.length bs)) <> ")"
+  case BS.uncons bs of
+    Nothing -> logWarnN "Received empty onion data"
+    Just (kind, payload) -> case kind of
+      0x83 -> case runBinary payload of
+                Nothing -> logWarnN "Failed to decode AnnounceRequest"
+                Just req -> handleAnnounceRequest dhtNodes from req
+      0x84 -> case runBinary payload of
+                Nothing -> logWarnN "Failed to decode AnnounceResponse"
+                Just res -> handleAnnounceResponse from res
+      0x85 -> case runBinary payload of
+                Nothing -> logWarnN "Failed to decode DataRouteRequest"
+                Just req -> handleDataRouteRequest from req
+      0x86 -> case runBinary payload of
+                Nothing -> logWarnN "Failed to decode DataRouteResponse"
+                Just res -> handleDataRouteResponse from res
+      0x9c -> case runBinary payload of
+                Nothing -> logWarnN "Failed to decode DHTPKPacket"
+                Just pkt -> handleDHTPKPacket mSenderPk from pkt
+      _    -> logWarnN $ "Received unknown onion data kind: " <> pack (show kind)
   where
     runBinary payload = case Binary.decodeOrFail (LBS.fromStrict payload) of
       Left _ -> Nothing
@@ -338,17 +404,91 @@ dispatchOnionData from bs = case BS.uncons bs of
 
 
 -- | Handle an Announce Request (Server side).
-handleAnnounceRequest :: OnionNodeMonad m => NodeInfo -> RPC.AnnounceRequest -> m ()
-handleAnnounceRequest _from _req = do
-  -- TODO: implement server-side announce handling
-  return ()
+handleAnnounceRequest :: OnionNodeMonad m => [NodeInfo] -> NodeInfo -> RPC.AnnounceRequest -> m ()
+handleAnnounceRequest dhtNodes from req = do
+  logInfoN $ "Received AnnounceRequest from " <> pack (show from)
+  ourDht <- getDhtKeyPair
+  
+  -- 1. Decrypt the payload
+  -- The payload is encrypted with our DHT keys and the sender's public key (real or temp).
+  let senderPk = RPC.announceRequestSenderPublicKey req
+  combined <- Keyed.getCombinedKey (KeyPair.secretKey ourDht) senderPk
+  case Box.decrypt combined (RPC.announceRequestNonce req) (RPC.announceRequestEncryptedPayload req) of
+    Nothing -> logWarnN $ "Failed to decrypt AnnounceRequest from " <> pack (show from)
+    Just plain -> case Box.decode plain of
+      Nothing -> logWarnN $ "Failed to decode AnnounceRequest payload from " <> pack (show from)
+      Just (payload :: RPC.AnnounceRequestPayload) -> do
+        now <- askTime
+        let searchKey = RPC.announceRequestSearchKey payload
+            pingId = RPC.announceRequestPingId payload
+            sendbackData = RPC.announceRequestSendbackData payload
+            sendbackKey = RPC.announceRequestDataSendbackKey payload
+            nullPk = Key (fromJust $ Sodium.decode $ BS.replicate 32 0)
+
+        -- 2. Process Announcement/Search
+        -- If pingId is null, we generate a new one and don't store yet.
+        -- If pingId matches what we sent, we store the announcement.
+        
+        let isStored = if pingId == nullPk 
+                       then 0 
+                       else 2 -- Simple implementation: always accept if they have a non-zero pingId
+        
+        when (isStored == 2) $ do
+           let announcement = LocalAnnouncement
+                 { laSenderRealPk = senderPk
+                 , laSenderDhtPk  = NodeInfo.publicKey from -- Assumes direct connection or Node A
+                 , laTimestamp    = now
+                 , laPingId       = pingId
+                 , laSendbackKey  = sendbackKey
+                 }
+           modifyOnion $ \s -> s { localAnnouncements = Map.insert searchKey announcement (localAnnouncements s) }
+           logInfoN $ "Stored Onion announcement for " <> pack (show searchKey)
+
+        -- 3. Construct Response
+        -- Find 4 closest nodes to searchKey in the provided DHT nodes
+        let foundNodes = take 4 $ sortBy (comparing (Distance.xorDistance searchKey . NodeInfo.publicKey)) dhtNodes
+        
+        let respPayload = RPC.AnnounceResponsePayload
+              { RPC.announceResponseIsStored = isStored
+              , RPC.announceResponsePingId   = if isStored == 0 then Key (fromJust $ Sodium.decode $ BS.replicate 32 1) else pingId -- Dummy pingId
+              , RPC.announceResponseNodes    = foundNodes
+              }
+            
+        newNonce <- MonadRandomBytes.randomNonce
+        let encryptedResp = Box.encrypt combined newNonce (Box.encode respPayload)
+            resp = RPC.AnnounceResponse
+              { RPC.announceResponseSendbackData = sendbackData
+              , RPC.announceResponseNonce = newNonce
+              , RPC.announceResponseEncryptedPayload = encryptedResp
+              }
+        
+        Networked.sendPacket from (Packet PacketKind.AnnounceResponse (RawPayload $ LBS.toStrict $ Binary.encode resp))
 
 
 -- | Handle a received DHT Public Key packet.
-handleDHTPKPacket :: OnionNodeMonad m => NodeInfo -> RPC.DHTPublicKeyPacket -> m ()
-handleDHTPKPacket _from _pkt = do
-  -- TODO: pass DHT key and nodes to DHT/FriendConnection modules
-  return ()
+handleDHTPKPacket :: OnionNodeMonad m => Maybe PublicKey -> NodeInfo -> RPC.DHTPublicKeyPacket -> m ()
+handleDHTPKPacket mSenderPk from pkt = do
+  logInfoN $ "Received DHTPKPacket from " <> pack (show from)
+  case mSenderPk of
+    Nothing -> logWarnN "Received DHTPKPacket with unknown sender (anonymous)"
+    Just senderPk -> do
+      let dhtPk = RPC.dhtPKPacketOurDHTKey pkt
+          relays = RPC.dhtPKPacketNodes pkt
+      
+      nowTime <- askTime
+      logInfoN $ "Discovered DHT Key for friend " <> pack (show senderPk) <> ": " <> pack (show dhtPk) <> " with " <> pack (show $ length relays) <> " relays"
+      
+      -- Update searchNodes so Connection layer can proceed
+      let newEntry = AnnouncedNode
+            { nodeInfo = NodeInfo.NodeInfo UDP (NodeInfo.address from) dhtPk
+            , pingId = Nothing
+            , lastAnnounced = Just nowTime
+            , pathNum = 0
+            }
+      
+      modifyOnion $ \s -> s 
+        { searchNodes = Map.insertWith (Map.union) senderPk (Map.singleton dhtPk newEntry) (searchNodes s) 
+        }
 
 
 -- | Send a DHT Public Key packet to a friend through their discovered relays.
@@ -380,10 +520,11 @@ announceOurselves dhtNodes = do
   let ourPk = KeyPair.publicKey ourLongTerm
       closest = take 12 $ sortBy (comparing (Distance.xorDistance ourPk . NodeInfo.publicKey)) dhtNodes
   
+  logInfoN $ "Announcing ourselves to " <> pack (show $ length closest) <> " nodes"
   forM_ closest $ \node -> do
     mPath <- zoomOnionPath $ Path.selectPath True
     case mPath of
-      Nothing -> return ()
+      Nothing -> logWarnN "No onion path available for announcement"
       Just path -> do
         mAnnounced <- getsOnion (Map.lookup (NodeInfo.publicKey node) . announcedNodes)
         let mPingId = mAnnounced >>= pingId
@@ -394,6 +535,7 @@ announceOurselves dhtNodes = do
 sendDataRouteRequest :: OnionNodeMonad m => OnionPath -> NodeInfo -> PublicKey -> Box.PlainText -> m ()
 sendDataRouteRequest path relay destPk payload = do
   ourLongTerm <- getsOnion ourLongTermKeys
+  ourDht <- getDhtKeyPair
   nonce <- MonadRandomBytes.randomNonce
   tempKp <- MonadRandomBytes.newKeyPair
   
@@ -414,8 +556,49 @@ sendDataRouteRequest path relay destPk payload = do
 
   case (cipherTextMaybe dataToD, Path.pathNodes path) of
     (Just ct, (nodeA:_)) -> do
-      onionPkt0 <- Path.wrapPath ourLongTerm path (NodeInfo.address relay) nonce ct
+      onionPkt0 <- Path.wrapPath ourDht path (NodeInfo.address relay) nonce (unCipherText ct)
       Networked.sendPacket nodeA $ Packet PacketKind.OnionRequest0 onionPkt0
     _ -> return ()
+
+
+-- | Handle a Data Route Request (Server side).
+handleDataRouteRequest :: OnionNodeMonad m => NodeInfo -> RPC.DataRouteRequest -> m ()
+handleDataRouteRequest from req = do
+  ourLongTerm <- getsOnion ourLongTermKeys
+  let destPk = RPC.dataRouteRequestDestination req
+  
+  if destPk == KeyPair.publicKey ourLongTerm
+  then do
+    logInfoN $ "Received DataRouteRequest for ourselves from " <> pack (show from)
+    -- We are the destination Node D.
+    -- 1. Decrypt the outer layer using Node D's keys and the temp PK.
+    let tempPk = RPC.dataRouteRequestTemporaryKey req
+        nonce = RPC.dataRouteRequestNonce req
+    combined <- Keyed.getCombinedKey (KeyPair.secretKey ourLongTerm) tempPk
+    case Box.decrypt combined nonce (RPC.dataRouteRequestEncryptedPayload req) of
+      Nothing -> logWarnN "Failed to decrypt DataRouteRequest outer layer"
+      Just plain -> case Box.decode plain of
+        Nothing -> logWarnN "Failed to decode DataRouteRequest inner payload"
+        Just (inner :: RPC.DataRouteInner) -> do
+          -- 2. Decrypt the inner layer using Node D's long-term keys and Sender's real PK.
+          let senderPk = RPC.dataRouteInnerSenderPublicKey inner
+          innerCombined <- Keyed.getCombinedKey (KeyPair.secretKey ourLongTerm) senderPk
+          case Box.decrypt innerCombined nonce (RPC.dataRouteInnerEncryptedPayload inner) of
+            Nothing -> logWarnN $ "Failed to decrypt DataRouteRequest inner layer from " <> pack (show senderPk)
+            Just payload -> do
+               logInfoN $ "Successfully decrypted Onion Data from " <> pack (show senderPk)
+               -- The payload starts with a Kind byte.
+               dispatchOnionData [] (Just senderPk) from (Box.unPlainText payload)
+  else do
+    logDebugN $ "Received DataRouteRequest for another node: " <> pack (show destPk)
+    -- TODO: implement relaying (send 0x86 to destination if we know them)
+    return ()
+
+
+-- | Handle a Data Route Response.
+handleDataRouteResponse :: OnionNodeMonad m => NodeInfo -> RPC.DataRouteResponse -> m ()
+handleDataRouteResponse _from _res = do
+  -- TODO: implement handling of responses to our own DataRouteRequests
+  return ()
 
 \end{code}
