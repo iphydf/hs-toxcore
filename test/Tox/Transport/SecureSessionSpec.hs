@@ -47,6 +47,7 @@ import           Tox.Network.Core.TimedT             (TimedT, runTimedT)
 import           Tox.Network.Core.TransportProtocol
 import           Tox.Transport.SecureSession
 import           Tox.Transport.SecureSession.Manager
+import qualified Tox.Transport.Reliability           as Reliability
 
 -- | A monad for running a full simulation with a SessionManager.
 type ManagerM = KeyedT (TimedT (RandT StdGen (StateT SessionManager (NetworkLogged Identity))))
@@ -105,7 +106,8 @@ spec = do
           pkt = Packet PacketKind.CryptoHandshake (LBS.toStrict $ encode h)
 
       -- 3. Run session via Manager at T=20s
-      let ss = runIdentity . evalRandT (initSession ourRealKp clientDhtPk ourDhtKp clientDhtPk peerNode) $ mkStdGen 3
+      let t0 = Timestamp $ Clock.TimeSpec 0 0
+      let ss = runIdentity . evalRandT (initSession t0 ourRealKp clientDhtPk ourDhtKp clientDhtPk peerNode) $ mkStdGen 3
       let sm = SessionManager (Map.fromList [(clientDhtPk, ss)]) cookieK ourDhtKp
           ((), _, actions) = runManagerM (mkStdGen 4) (Timestamp $ Clock.TimeSpec 20 0) sm (dispatchPacket peerNode pkt)
 
@@ -132,7 +134,8 @@ spec = do
           pkt = Packet PacketKind.CryptoHandshake (LBS.toStrict $ encode h)
 
       -- 3. Run session via Manager
-      let ss = runIdentity . evalRandT (initSession ourRealKp clientDhtPk ourDhtKp clientDhtPk oldPeerNode) $ mkStdGen 3
+      let t0 = Timestamp $ Clock.TimeSpec 0 0
+      let ss = runIdentity . evalRandT (initSession t0 ourRealKp clientDhtPk ourDhtKp clientDhtPk oldPeerNode) $ mkStdGen 3
       let sm = SessionManager (Map.fromList [(clientDhtPk, ss)]) cookieK ourDhtKp
           ((), sm', _) = runManagerM (mkStdGen 4) (Timestamp $ Clock.TimeSpec 1 0) sm (dispatchPacket newPeerNode pkt)
 
@@ -150,16 +153,18 @@ spec = do
           peerNode = NodeInfo UDP (SocketAddress (IPv4 0) 33445) clientDhtPk
 
       -- 1. Setup established session with shared key
+      let t0 = Timestamp $ Clock.TimeSpec 0 0
       let sessionSharedK = CombinedKey.precompute (KeyPair.secretKey ourRealKp) clientDhtPk -- dummy for test
           peerBaseNonce = Nonce.integerToNonce 0
-      let ss = runIdentity . evalRandT (initSession ourRealKp clientDhtPk ourDhtKp clientDhtPk peerNode) $ mkStdGen 1
+      let ss = runIdentity . evalRandT (initSession t0 ourRealKp clientDhtPk ourDhtKp clientDhtPk peerNode) $ mkStdGen 1
       let ssEst = ss { ssSharedKey = Just sessionSharedK, ssPeerBaseNonce = Just peerBaseNonce, ssStatus = Just SessionConfirmed }
           sm = SessionManager (Map.fromList [(clientDhtPk, ssEst)]) cookieK ourDhtKp
 
       -- 2. Receive packet with offset +10 (Out-of-order)
       let nonce10 = Nonce.integerToNonce 10
           shortNonce10 = 10
-          encrypted10 = Box.encrypt sessionSharedK nonce10 (Box.PlainText "hello")
+          rp = Reliability.ReliablePacket (Reliability.SeqNum 0) (Reliability.SeqNum 10) True "hello"
+          encrypted10 = Box.encrypt sessionSharedK nonce10 (Box.PlainText $ LBS.toStrict $ encode rp)
           cd10 = CryptoDataPacket shortNonce10 encrypted10
           pkt10 = Packet PacketKind.CryptoData (LBS.toStrict $ encode cd10)
 

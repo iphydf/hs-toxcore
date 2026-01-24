@@ -115,7 +115,8 @@ doFriendConnections = do
         case relays of
           [] -> return ()
           (r:_) -> do
-            ss <- SecureSession.initSession ourReal pk ourDht dhtPk r
+            now <- Timed.askTime
+            ss <- SecureSession.initSession now ourReal pk ourDht dhtPk r
             updateFriendStatus pk (FriendConnecting ss)
             -- Handshake will be triggered by first send or periodic retry
             return ()
